@@ -102,7 +102,7 @@ struct SequentialScheduleView: View {
                     } header: { Text("正在安排") }
                     Section {
                         HStack {
-                            Button("今天") { apply(Schedule(Date())) }
+                            Button("今天") { apply(Schedule(Date())) }.accessibilityIdentifier("queue_today")
                             Spacer(); Button("明天") { apply(Schedule(PlannerDates.shifted(Date(), .day, by: 1))) }
                             Spacer(); Button("本週") { apply(Schedule(Date(), scale: .week)) }
                             Spacer(); Button("下週") { apply(Schedule(PlannerDates.shifted(Date(), .week, by: 1), scale: .week)) }

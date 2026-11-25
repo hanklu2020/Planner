@@ -60,7 +60,7 @@ final class PlannerUITests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "連續安排這")).firstMatch.tap()
         XCTAssertTrue(app.staticTexts["queueTaskTitle"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["queueTaskTitle"].label, "整理資料\(suffix)")
-        app.buttons["今天"].tap()
+        app.buttons["queue_today"].tap()
         XCTAssertTrue(app.staticTexts["這一輪安排完成"].waitForExistence(timeout: 5))
         app.buttons["復原上一項"].tap()
         XCTAssertEqual(app.staticTexts["queueTaskTitle"].label, "整理資料\(suffix)")
