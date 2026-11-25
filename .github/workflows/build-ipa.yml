@@ -1,23 +1,45 @@
 name: Build Planner IPA
 on:
   workflow_dispatch:
+  push:
+    branches: ['codex/planner-*']
 permissions:
   contents: read
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
         run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Select iPhone simulator
+        run: |
+          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for group in data["devices"].values() for d in group if d["name"].startswith("iPhone")))')
+          echo "PLANNER_SIMULATOR_ID=$SIMULATOR_ID" >> "$GITHUB_ENV"
+      - name: Compile simulator app and tests
+        run: xcodebuild -project Planner.xcodeproj -scheme Planner -configuration Debug -destination "platform=iOS Simulator,id=$PLANNER_SIMULATOR_ID" -derivedDataPath build-tests CODE_SIGNING_ALLOWED=NO build-for-testing
+      - name: Unit and iPhone UI tests
+        run: xcodebuild -project Planner.xcodeproj -scheme Planner -configuration Debug -destination "platform=iOS Simulator,id=$PLANNER_SIMULATOR_ID" -derivedDataPath build-tests -resultBundlePath TestResults.xcresult -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 300 -maximum-test-execution-time-allowance 300 CODE_SIGNING_ALLOWED=NO test-without-building
       - name: Build iPhone app
         run: |
-          xcodegen generate
           xcodebuild -project Planner.xcodeproj -scheme Planner -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
       - name: Package unsigned IPA
         run: |
           mkdir -p dist/Payload
           cp -R build/Build/Products/Release-iphoneos/Planner.app dist/Payload/
+          python3 - <<'PYTHON'
+          import plistlib
+          with open('dist/Payload/Planner.app/Info.plist', 'rb') as file:
+              info = plistlib.load(file)
+          assert info['UIFileSharingEnabled'] is True
+          assert info['LSSupportsOpeningDocumentsInPlace'] is True
+          assert info['CFBundleIdentifier'] == 'com.personalplanner.mvp'
+          assert info['CFBundleShortVersionString'] == '2.1.0'
+          assert str(info['CFBundleVersion']) == '210'
+          PYTHON
           cd dist
           /usr/bin/zip -qry Planner.ipa Payload
           unzip -t Planner.ipa
@@ -26,3 +48,9 @@ jobs:
           name: Planner-IPA
           path: dist/Planner.ipa
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Planner-Test-Results
+          path: TestResults.xcresult
+          if-no-files-found: ignore
