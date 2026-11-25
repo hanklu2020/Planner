@@ -107,22 +107,24 @@ struct TagCategoryEditor: View {
 struct TagCategoryView: View {
     @EnvironmentObject private var store: PlannerStore
     let categoryID: String
+    var criteria = ContactCriteria()
     @State private var editing: ContactTag?
     @State private var name = ""
     @State private var naming = false
 
     var body: some View {
         if let category = store.tags.categories.first(where: { $0.id == categoryID }) {
+            let visible = Set(ContactDirectory.people(store, in: criteria).map(\.id))
             List {
                 ColorPicker("大圈顏色", selection: Binding(get: {
                     TagPalette.color(category.color)
                 }, set: { store.setCategoryColor(TagPalette.hex($0), category: categoryID) }), supportsOpacity: false)
                 ForEach(store.tags.tags(in: categoryID)) { tag in
-                    NavigationLink { TagMembers(tagID: tag.id) } label: {
+                    NavigationLink(value: ContactRoute.members(tag.id, criteria)) {
                         HStack {
                             Text(tag.name)
                             Spacer()
-                            Text("\(store.contactIndex.members[tag.id]?.count ?? 0) 人").foregroundStyle(.secondary)
+                            Text("\((store.contactIndex.members[tag.id] ?? []).intersection(visible).count) 人").foregroundStyle(.secondary)
                         }
                     }.swipeActions { Button("改名") { edit(tag) }.tint(.plannerAccent) }
                 }
@@ -144,55 +146,42 @@ struct TagCategoryView: View {
     }
 }
 
+struct ContactTagLabel: View {
+    @EnvironmentObject private var store: PlannerStore
+    let tag: ContactTag
+
+    var body: some View {
+        Label(store.tags.name(for: tag), systemImage: "tag")
+            .foregroundStyle(TagPalette.color(store.tags.category(for: tag)?.color ?? ""))
+    }
+}
+
 struct TagMembers: View {
     @EnvironmentObject private var store: PlannerStore
-    @Environment(\.dismiss) private var dismiss
     let tagID: UUID
-    var modal = false
-    @State private var selecting = false
+    var criteria = ContactCriteria()
+    @State private var selection = ContactSelection()
     @State private var adding = false
-    @State private var selected: Set<UUID> = []
-    @State private var removing = false
 
     var body: some View {
         let tag = store.tags.tags.first { $0.id == tagID }
-        let ids = store.contactIndex.members[tagID] ?? []
-        let rows = ids.compactMap { store.contact($0) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        List {
-            if rows.isEmpty { Text("這個圈子還沒有成員。").foregroundStyle(.secondary) }
-            ForEach(rows) { person in
-                if selecting {
-                    Button {
-                        if selected.contains(person.id) { selected.remove(person.id) } else { selected.insert(person.id) }
-                    } label: { Label(person.name, systemImage: selected.contains(person.id) ? "checkmark.circle.fill" : "circle") }
-                } else {
-                    NavigationLink(person.name) { ContactDetailView(contactID: person.id) }
+        let people = ContactDirectory.people(store, in: criteria, circle: tagID)
+        ContactPeopleList(people: people, circle: tagID, selection: $selection)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                NavigationLink(value: ContactRoute.circleBirthdays(tagID, criteria)) {
+                    Label("看這個圈的生日", systemImage: "birthday.cake").font(.subheadline)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.vertical, 9)
                 }
             }
-        }
-        .navigationTitle(tag?.name ?? "成員").navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if modal { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button(selecting ? "取消選取" : "選取") { selecting.toggle(); selected = [] }.disabled(rows.isEmpty && !selecting)
-                Button { adding = true } label: { Image(systemName: "person.badge.plus") }.accessibilityLabel("加入成員")
+            .navigationTitle(tag?.name ?? "成員").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button(selection.active ? "取消選取" : "選取") { selection = ContactSelection(active: !selection.active) }
+                        .disabled(people.isEmpty && !selection.active)
+                    Button { adding = true } label: { Image(systemName: "person.badge.plus") }.accessibilityLabel("加入成員")
+                }
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            if selecting {
-                HStack {
-                    Button("全選 \(rows.count) 人") { selected = ids }
-                    Spacer()
-                    Button("移出 \(selected.count) 人", role: .destructive) { removing = true }.disabled(selected.isEmpty)
-                }.padding(13).background(.regularMaterial)
-            }
-        }
-        .confirmationDialog("移出 \(selected.count) 人？", isPresented: $removing, titleVisibility: .visible) {
-            Button("移出成員", role: .destructive) {
-                store.changeTags([tagID], for: selected, adding: false); selecting = false; selected = []
-            }
-        }
-        .sheet(isPresented: $adding) { AddTagMembers(tagID: tagID, name: tag?.name ?? "") }
+            .sheet(isPresented: $adding) { AddTagMembers(tagID: tagID, name: tag?.name ?? "") }
     }
 }
 
@@ -202,82 +191,127 @@ private struct AddTagMembers: View {
     let tagID: UUID
     let name: String
     @State private var search = ""
-    @State private var selected: Set<UUID> = []
+    @State private var selection = ContactSelection(active: true)
+    @State private var draft: Contact?
 
     var body: some View {
         let existing = store.contactIndex.members[tagID] ?? []
-        let contacts = store.contactIndex.byID.values.filter {
-            !$0.archived && !existing.contains($0.id) && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search))
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let term = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matches = store.contactIndex.byID.values.filter {
+            term.isEmpty || $0.name.localizedCaseInsensitiveContains(term) || $0.details.localizedCaseInsensitiveContains(term)
+        }.sorted(by: ContactDirectory.nameOrder)
+        let available = matches.filter { !$0.archived && !existing.contains($0.id) }
+        let others = term.isEmpty ? [] : matches.filter { existing.contains($0.id) || $0.archived }
         return NavigationStack {
             List {
-                if !contacts.isEmpty { Button("全選這 \(contacts.count) 筆結果") { selected.formUnion(contacts.map(\.id)) } }
-                ForEach(contacts) { person in
-                    Button {
-                        if selected.contains(person.id) { selected.remove(person.id) } else { selected.insert(person.id) }
-                    } label: { Label(person.name, systemImage: selected.contains(person.id) ? "checkmark.circle.fill" : "circle") }
+                if !available.isEmpty {
+                    Button("全選這 \(available.count) 筆結果") { selection.ids = Set(available.map(\.id)) }
+                    ForEach(available) { person in
+                        Button { selection.toggle(person.id) } label: {
+                            Label { candidate(person) } icon: {
+                                Image(systemName: selection.ids.contains(person.id) ? "checkmark.circle.fill" : "circle")
+                            }
+                        }
+                    }
+                }
+                if !others.isEmpty {
+                    Section("其他同名或符合的聯絡人") { ForEach(others) { candidate($0) } }
+                }
+                if available.isEmpty && term.isEmpty {
+                    Text("目前沒有可加入的聯絡人。").foregroundStyle(.secondary)
+                }
+                Button(term.isEmpty ? "新增聯絡人" : "新增「\(term)」", systemImage: "person.badge.plus") {
+                    draft = Contact(name: term, tagIDs: [tagID])
                 }
             }
-            .searchable(text: $search, prompt: "搜尋聯絡人")
+            .searchable(text: $search, prompt: "搜尋或輸入新姓名")
             .navigationTitle("加入 \(name)").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("關閉") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("加入 \(selected.count) 人") { store.changeTags([tagID], for: selected, adding: true); dismiss() }.disabled(selected.isEmpty)
+                    Button("加入 \(selection.ids.count) 人") {
+                        store.changeTags([tagID], for: selection.ids, adding: true)
+                        dismiss()
+                    }.disabled(selection.ids.isEmpty)
                 }
             }
+            .onChange(of: Set(available.map(\.id))) { _, ids in selection.ids.formIntersection(ids) }
+            .sheet(item: $draft) { ContactEditor(initial: $0, isNew: true) }
+        }
+    }
+
+    private func candidate(_ person: Contact) -> some View {
+        let tags = store.tags.tags.filter { person.tagIDs?.contains($0.id) == true }.prefix(2).map { store.tags.name(for: $0) }
+        let status = person.archived ? "已封存" : person.tagIDs?.contains(tagID) == true ? "已加入" : nil
+        let note = ([status].compactMap { $0 } + tags + [person.details]).filter { !$0.isEmpty }.joined(separator: " · ")
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(person.name).foregroundStyle(.primary)
+            if !note.isEmpty { Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
         }
     }
 }
 
-struct ContactCircleMap: View {
+struct CirclePreview: View {
     @EnvironmentObject private var store: PlannerStore
-    let categories: [ContactTagCategory]
-    let tags: [ContactTag]
-    var select: (ContactTag) -> Void
-    @State private var scale: CGFloat = 1
-    @GestureState private var magnification: CGFloat = 1
+    let tag: ContactTag
+    let criteria: ContactCriteria
+    let open: (ContactRoute) -> Void
 
     var body: some View {
-        let zoom = clamped(scale * magnification)
-        let columns = 2
-        let cell: CGFloat = 150
-        let gap: CGFloat = 14
-        let width = (cell + gap) * CGFloat(columns) - gap
-        let height = (cell + gap) * CGFloat((tags.count + columns - 1) / columns) - gap
-        return Group {
-            if tags.isEmpty {
-                ContentUnavailableView("還沒有圈子", systemImage: "circle.hexagongrid", description: Text("前往標籤頁建立大圈。"))
-            } else {
-                ScrollView([.horizontal, .vertical]) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(cell), spacing: gap), count: columns), spacing: gap) {
-                        ForEach(tags) { tag in
-                            let category = categories.first { $0.id == tag.categoryID }
-                            let color = TagPalette.color(category?.color ?? "")
-                            let count = store.contactIndex.members[tag.id]?.count ?? 0
-                            Button { select(tag) } label: {
-                                VStack(spacing: 6) {
-                                    Text(tag.name).font(.headline).lineLimit(2)
-                                    Text("\(count) 人").font(.caption).monospacedDigit()
-                                }.multilineTextAlignment(.center)
-                                    .padding(14).frame(width: cell, height: cell)
-                                    .foregroundStyle(color)
-                                    .background(color.opacity(0.12), in: Circle())
-                                    .overlay { Circle().strokeBorder(color.opacity(0.5), lineWidth: 1) }
-                            }.buttonStyle(.plain)
-                        }
-                    }
-                    .frame(width: width, height: height, alignment: .top)
-                    .scaleEffect(zoom, anchor: .topLeading)
-                    .frame(width: width * zoom, height: height * zoom, alignment: .topLeading)
-                    .padding(16)
+        let people = ContactDirectory.people(store, in: criteria, circle: tag.id)
+        let birthdays = BirthdayOccurrence.upcoming(for: people)
+        List {
+            Section("\(people.count) 位聯絡人") {
+                ForEach(people.prefix(3)) { person in
+                    Button(person.name) { open(.person(person.id)) }
                 }
-                .simultaneousGesture(MagnificationGesture().updating($magnification) { value, state, _ in
-                    state = value
-                }.onEnded { scale = clamped(scale * $0) })
+                Button("查看成員", systemImage: "person.2") { open(.members(tag.id, criteria)) }
+            }
+            Section("近期生日") {
+                ForEach(birthdays.prefix(2)) { event in
+                    Button { open(.person(event.id)) } label: {
+                        LabeledContent(event.person.name, value: PlannerDates.text(event.date, "M/d"))
+                    }
+                }
+                Button("看這個圈的生日", systemImage: "birthday.cake") { open(.circleBirthdays(tag.id, criteria)) }
+            }
+        }.safeAreaInset(edge: .top) {
+            ContactTagLabel(tag: tag).font(.headline).padding(.top, 24).padding(.bottom, 5)
+        }
+    }
+}
+
+struct ContactCircleMap<EmptyActions: View>: View {
+    @EnvironmentObject private var store: PlannerStore
+    let counts: [UUID: Int]
+    let open: (ContactTag) -> Void
+    @ViewBuilder var emptyActions: () -> EmptyActions
+
+    var body: some View {
+        let tags = store.tags.tags.filter { counts[$0.id] != nil }
+        if tags.isEmpty {
+            ContentUnavailableView {
+                Label("這個範圍沒有可顯示的圈子", systemImage: "circle.hexagongrid")
+            } description: {
+                Text("全圖顯示目前範圍內有成員的標籤。")
+            } actions: { emptyActions() }
+        } else {
+            ScrollView {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2), spacing: 12) {
+                    ForEach(tags) { tag in
+                        let color = TagPalette.color(store.tags.category(for: tag)?.color ?? "")
+                        Button { open(tag) } label: {
+                            VStack(spacing: 5) {
+                                Text(tag.name).font(.headline).lineLimit(2)
+                                Text("\(counts[tag.id] ?? 0) 人").font(.caption).monospacedDigit()
+                            }.multilineTextAlignment(.center)
+                                .padding(12).frame(maxWidth: .infinity, minHeight: 104)
+                                .foregroundStyle(color).background(color.opacity(0.12), in: Capsule())
+                                .overlay { Capsule().strokeBorder(color.opacity(0.35), lineWidth: 1) }
+                        }.buttonStyle(.plain)
+                    }
+                }.padding(16)
             }
         }
     }
-
-    private func clamped(_ value: CGFloat) -> CGFloat { min(2.5, max(0.6, value)) }
 }

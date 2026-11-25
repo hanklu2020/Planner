@@ -31,17 +31,7 @@ struct ContentView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if let notice = store.notice {
-                HStack {
-                    Text(notice).font(.caption)
-                    Spacer(minLength: 8)
-                    if store.canUndoChange { Button("復原") { store.undoChange() }.font(.caption.bold()) }
-                    else if store.canUndoSchedule { Button("復原") { store.undoSchedule() }.font(.caption.bold()) }
-                    Button { store.notice = nil; store.clearChangeUndo() } label: { Image(systemName: "xmark").font(.caption) }.accessibilityLabel("關閉提示")
-                }
-                .padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                .padding(.horizontal, 16).padding(.bottom, 58)
-            }
+            if tab != 3 || store.recoveryRequired { PlannerNotice().padding(.bottom, 58) }
         }
         .plannerErrors()
         .sheet(isPresented: $showingSettings) { SettingsView() }
@@ -49,6 +39,26 @@ struct ContentView: View {
             // Refresh relative dates and overdue indicators after midnight / foregrounding.
             if value == .active { store.objectWillChange.send() }
             else { store.flushForBackground() }
+        }
+    }
+}
+
+struct PlannerNotice: View {
+    @EnvironmentObject private var store: PlannerStore
+
+    var body: some View {
+        if let notice = store.notice {
+            HStack {
+                Text(notice).font(.caption)
+                Spacer(minLength: 8)
+                if store.canUndoChange { Button("復原") { store.undoChange() }.font(.caption.bold()) }
+                else if store.canUndoSchedule { Button("復原") { store.undoSchedule() }.font(.caption.bold()) }
+                Button { store.notice = nil; store.clearChangeUndo() } label: {
+                    Image(systemName: "xmark").font(.caption)
+                }.accessibilityLabel("關閉提示")
+            }
+            .padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 16)
         }
     }
 }

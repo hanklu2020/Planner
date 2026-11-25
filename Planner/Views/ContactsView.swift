@@ -1,173 +1,8 @@
 import SwiftUI
 
-struct ContactsView: View {
-    @EnvironmentObject private var store: PlannerStore
-    @State private var search = ""
-    @State private var editing: Contact?
-    @State private var showArchived = false
-    @State private var mode: ContactMode = .list
-    @State private var selecting = false
-    @State private var selected: Set<UUID> = []
-    @State private var batch: TagBatch?
-    @State private var newCategory = false
-    @State private var graphMember: ContactTag?
-    @State private var categoryFilter: String?
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                switch mode {
-                case .list: contactList
-                case .tags: categories
-                case .map:
-                    ContactCircleMap(categories: store.tags.categories, tags: store.tags.tags.filter {
-                        categoryFilter == nil || categoryFilter == $0.categoryID
-                    }) { graphMember = $0 }
-                }
-            }
-            .navigationTitle("人脈").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if mode == .list {
-                        Menu {
-                            Button(selecting ? "取消選取" : "選取聯絡人") { selecting.toggle(); selected.removeAll() }
-                            Toggle("顯示已封存", isOn: $showArchived)
-                        } label: { Image(systemName: selecting ? "checkmark.circle.fill" : "line.3.horizontal.decrease") }
-                            .accessibilityLabel("選取與篩選聯絡人")
-                    }
-                    if mode == .map {
-                        Menu {
-                            Picker("分類", selection: $categoryFilter) {
-                                Text("全部分類").tag(nil as String?)
-                                ForEach(store.tags.categories) { Text($0.name).tag(Optional($0.id)) }
-                            }
-                        } label: { Image(systemName: "line.3.horizontal.decrease") }.accessibilityLabel("篩選圈子")
-                    }
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Menu {
-                        Picker("人脈檢視", selection: $mode) {
-                            ForEach(ContactMode.allCases) { Label($0.rawValue, systemImage: $0.symbol).tag($0) }
-                        }
-                    } label: { Image(systemName: mode.symbol) }.accessibilityLabel("切換人脈檢視")
-                    Button { editing = Contact() } label: { Image(systemName: "plus") }.accessibilityLabel("新增聯絡人")
-                }
-            }
-            .sheet(item: $editing) { ContactEditor(initial: $0) }
-            .sheet(item: $batch) { TagBatchPicker(batch: $0) }
-            .sheet(isPresented: $newCategory) { TagCategoryEditor() }
-            .sheet(item: $graphMember) { tag in
-                NavigationStack { TagMembers(tagID: tag.id, modal: true) }
-            }
-        }
-    }
-
-    private var contactList: some View {
-        let contacts = store.contactIndex.byID.values.filter {
-            (showArchived || !$0.archived) && (search.isEmpty || ($0.name + " " + $0.details).localizedCaseInsensitiveContains(search))
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        return List {
-            if contacts.isEmpty { EmptyMessage(title: "沒有聯絡人", symbol: "person.2", detail: "新增聯絡人，或試試其他搜尋文字。") }
-            ForEach(contacts) { contact in
-                if selecting {
-                    Button {
-                        if selected.contains(contact.id) { selected.remove(contact.id) } else { selected.insert(contact.id) }
-                    } label: {
-                        Label(contact.name, systemImage: selected.contains(contact.id) ? "checkmark.circle.fill" : "circle")
-                    }
-                } else {
-                    NavigationLink { ContactDetailView(contactID: contact.id) } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(contact.name)
-                            if let summary = store.contactIndex.latest[contact.id] {
-                                Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            } else if !contact.details.isEmpty {
-                                Text(contact.details).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                        }.padding(.vertical, 3)
-                    }
-                }
-            }
-        }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜尋聯絡人")
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if selecting {
-                HStack {
-                    Menu("已選 \(selected.count) 人") {
-                        Button("全選這 \(contacts.count) 筆結果") { selected.formUnion(contacts.map(\.id)) }
-                        Button("清除選取") { selected.removeAll() }
-                    }
-                    Spacer()
-                    Button("加標籤") { batch = TagBatch(people: selected, adding: true) }.disabled(selected.isEmpty)
-                    Button("移除標籤") { batch = TagBatch(people: selected, adding: false) }.disabled(selected.isEmpty)
-                }.font(.subheadline).padding(13).background(.regularMaterial)
-            }
-        }
-    }
-
-    private var categories: some View {
-        ScrollView {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2), spacing: 12) {
-                ForEach(store.tags.categories) { category in
-                    NavigationLink { TagCategoryView(categoryID: category.id) } label: {
-                        categoryCard(category.name, icon: "tag", color: TagPalette.color(category.color))
-                    }.buttonStyle(.plain)
-                }
-                Button { newCategory = true } label: { categoryCard("新增分類", icon: "plus", color: .secondary) }
-                    .buttonStyle(.plain).accessibilityLabel("新增分類")
-            }.padding()
-        }
-    }
-
-    private func categoryCard(_ title: String, icon: String, color: Color) -> some View {
-        Label(title, systemImage: icon)
-            .font(.headline).foregroundStyle(color)
-            .frame(maxWidth: .infinity, minHeight: 72)
-            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
-    }
-}
-
-private enum ContactMode: String, CaseIterable, Identifiable {
-    case list = "清單", tags = "標籤", map = "全圖"
-    var id: String { rawValue }
-    var symbol: String {
-        switch self {
-        case .list: return "list.bullet"
-        case .tags: return "tag"
-        case .map: return "circle.hexagongrid"
-        }
-    }
-}
-
-struct ContactEditor: View {
-    @EnvironmentObject private var store: PlannerStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var value: Contact
-    init(initial: Contact) { _value = State(initialValue: initial) }
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("姓名", text: $value.name).accessibilityIdentifier("contactName")
-                    TextField("聯絡方式或備註（選填）", text: $value.details, axis: .vertical).lineLimit(2...5)
-                }
-                Section {
-                    Toggle("保留長期紀錄", isOn: $value.keepHistory)
-                    Toggle("封存聯絡人", isOn: $value.archived)
-                } footer: { Text("封存後仍保留往來與任務關聯。保留長期紀錄可避免手動清理舊往來。") }
-            }
-            .plannerErrors()
-            .navigationTitle("聯絡人").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("儲存") { Task { if store.saveContact(value) { await store.flush(); if !store.saveFailed { dismiss() } } } }.disabled(value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).accessibilityIdentifier("saveContact") }
-            }
-        }
-    }
-}
-
 struct ContactDetailView: View {
     @EnvironmentObject private var store: PlannerStore
+    @Environment(\.dismiss) private var dismiss
     let contactID: UUID
     @State private var edit = false
     @State private var entry: Interaction?
@@ -175,10 +10,19 @@ struct ContactDetailView: View {
     @State private var showCleanup = false
     @State private var cleanupDate = PlannerDates.shifted(Date(), .year, by: -1)
     @State private var confirmCleanup = false
+    @State private var confirmDeletion = false
+    @State private var birthdayEditor = false
+    @State private var tagPicker: TagBatch?
+    @State private var editingTags = false
     var body: some View {
         if let contact = store.contact(contactID) {
             List {
-                if !contact.details.isEmpty { Section { Text(contact.details) } }
+                Section {
+                    if !contact.details.isEmpty { Text(contact.details) }
+                    Button { birthdayEditor = true } label: {
+                        LabeledContent("生日", value: contact.birthday?.title ?? "未填寫")
+                    }
+                }
                 let pending = store.data.tasks.filter { $0.isOpen && $0.contactIDs.contains(contactID) }
                 Section("待辦事項") {
                     ForEach(pending) { TaskRow(task: $0) }
@@ -206,10 +50,50 @@ struct ContactDetailView: View {
                     }
                 }
                 if !contact.keepHistory { Section { Button("清理舊往來紀錄") { showCleanup = true } } }
+                Section {
+                    ForEach(store.tags.tags.filter { contact.tagIDs?.contains($0.id) == true }) { tag in
+                        HStack {
+                            NavigationLink(value: ContactRoute.members(tag.id, ContactCriteria(scope: contact.archived ? .archived : .active))) { ContactTagLabel(tag: tag) }
+                            if editingTags {
+                                Button(role: .destructive) { store.changeTags([tag.id], for: [contactID], adding: false) } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                }.buttonStyle(.borderless).accessibilityLabel("移除標籤 \(tag.name)")
+                            }
+                        }
+                    }
+                    Button("加標籤", systemImage: "plus") { tagPicker = TagBatch(people: [contactID], adding: true) }
+                } header: {
+                    HStack {
+                        Text("標籤")
+                        Spacer()
+                        if store.tags.tags.contains(where: { contact.tagIDs?.contains($0.id) == true }) {
+                            Button(editingTags ? "完成" : "編輯標籤") { editingTags.toggle() }.textCase(nil)
+                        }
+                    }
+                }
             }
             .navigationTitle(contact.name).navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("編輯") { edit = true } }
+            .toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button("編輯") { edit = true }
+                    Menu {
+                        NavigationLink("在全圖查看", value: ContactRoute.focusMap(contactID))
+                        if contact.birthday != nil { NavigationLink("在生日查看", value: ContactRoute.focusBirthday(contactID)) }
+                        else { Button("填寫生日") { birthdayEditor = true } }
+                        Button("刪除聯絡人", role: .destructive) { confirmDeletion = true }
+                    } label: { Image(systemName: "ellipsis.circle") }.accessibilityLabel("聯絡人操作")
+                }
+            }
+            .confirmationDialog("刪除 \(contact.name)？", isPresented: $confirmDeletion, titleVisibility: .visible) {
+                Button("刪除聯絡人", role: .destructive) {
+                    if store.deleteContact(contactID) {
+                        Task { await store.flush(); if !store.saveFailed { dismiss() } }
+                    }
+                }
+            } message: { Text("將刪除此人的 Markdown 與往來，並從任務解除聯絡人連結。") }
             .sheet(isPresented: $edit) { ContactEditor(initial: contact) }
+            .sheet(isPresented: $birthdayEditor) { BirthdayQueue(ids: [contactID]) }
+            .sheet(item: $tagPicker) { TagBatchPicker(batch: $0) }
             .sheet(item: $entry) { InteractionEditor(initial: $0) }
             .sheet(item: $task) { TaskEditor(initial: $0.task) }
             .sheet(isPresented: $showCleanup) {

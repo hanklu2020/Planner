@@ -109,6 +109,41 @@ final class MarkdownTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".planner/pending.json").path))
         XCTAssertEqual(try MarkdownVault(directory: root).load()?.journal[0].text, "中斷前最新內容")
     }
+    func testBirthdayMetadataKeepsTagsAndLegacyMarkdownReadable() throws {
+        let tag = UUID(), person = Contact(name: "Amy", details: "備註", tagIDs: [tag], birthday: ContactBirthday(month: 2, day: 29))
+        let bytes = try PlannerMarkdown.person(person, interactions: [], completions: [])
+        let path = "Contacts/Amy.md"
+        func read(_ bytes: Data) throws -> Contact? {
+            try PlannerMarkdown.read(bytes, fallbackName: "Amy", fallbackDate: Date(), relativePath: path, contactFile: true).contacts.first
+        }
+        XCTAssertEqual(try read(bytes), person)
+        let old = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "**生日**：02-29\n\n", with: "")
+        XCTAssertEqual(try read(Data(old.utf8))?.tagIDs, [tag])
+        XCTAssertNil(try read(Data(old.utf8))?.birthday)
+        let calendar = PlannerDates.calendar
+        let newYear = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 1, day: 1)))
+        let date = try XCTUnwrap(person.birthday?.next(on: newYear, calendar: calendar))
+        XCTAssertEqual(PlannerDates.text(date, "yyyy-MM-dd", calendar: calendar), "2025-02-28")
+    }
+
+    func testDeletingContactRemovesItsMarkdownAndKeepsOtherPerson() throws {
+        let root = try temporary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let vault = MarkdownVault(directory: root)
+        var document = PlannerDocument()
+        let kept = Contact(name: "Keep"), removed = Contact(name: "Remove")
+        document.contacts = [kept, removed]
+        try vault.save(document)
+        let people = root.appendingPathComponent("Contacts")
+        let file = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: people, includingPropertiesForKeys: nil)
+            .first { $0.lastPathComponent.hasPrefix("Remove--") })
+        document.contacts = [kept]
+        try vault.save(document)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(try MarkdownVault(directory: root).load()?.contacts, [kept])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".planner/封存").path))
+    }
+
     func testLegacyMissingFieldsAndStringStorage() throws {
         let suite = "MarkdownTests-\(UUID())", defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }

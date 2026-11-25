@@ -198,6 +198,7 @@ struct Contact: Codable, Identifiable, Equatable {
     var keepHistory = false
     var archived = false
     var tagIDs: [UUID]?
+    var birthday: ContactBirthday?
 }
 
 struct Interaction: Codable, Identifiable, Equatable {
@@ -240,7 +241,7 @@ struct CompletionRecord: Codable, Identifiable, Equatable {
 }
 
 struct PlannerDocument: Codable, Equatable {
-    static let currentVersion = 4
+    static let currentVersion = 5
     var version = currentVersion
     var goals: [Goal] = []
     var tasks: [PlannerTask] = []

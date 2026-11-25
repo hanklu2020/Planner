@@ -23,9 +23,11 @@ struct MarkdownContent {
     var contacts: [Contact] = []
     var interactions: [Interaction] = []
     var completions: [CompletionRecord] = []
+    var hasBirthdayField = false
 }
 
 enum PlannerMarkdown {
+    private static let birthdayPrefix = "**生日**："
     private static let tagPrefix = "<!-- Planner tags: "
     static let signature = "<!-- Planner Markdown 1 -->"
     private static func encoder() -> JSONEncoder {
@@ -51,6 +53,7 @@ enum PlannerMarkdown {
     static func person(_ contact: Contact, interactions: [Interaction], completions: [CompletionRecord]) throws -> Data {
         var text = signature + "\n# 聯絡人\n\n"
         text += try block(MarkdownMeta(kind: "contact", id: contact.id, keepHistory: contact.keepHistory, archived: contact.archived), heading: "## \(contact.name.replacingOccurrences(of: "\n", with: " "))", text: contact.details)
+        text += birthdayPrefix + (contact.birthday?.text ?? "") + "\n\n"
         var records: [(Date, String, String)] = []
         for entry in interactions {
             records.append((entry.date, entry.id.uuidString, try block(MarkdownMeta(kind: "interaction", id: entry.id, date: entry.date, contactIDs: [contact.id]), heading: "### \(PlannerDates.text(entry.date, "yyyy-MM-dd HH:mm")) 往來", text: entry.text)))
@@ -68,6 +71,10 @@ enum PlannerMarkdown {
         // Contact files retain a short standalone record; the monthly journal has the full text.
         return try block(meta, heading: "### \(record.title.replacingOccurrences(of: "\n", with: " "))", text: "完成日期：\(PlannerDates.text(record.date, "yyyy-MM-dd HH:mm"))\n" + (summary ? "" : record.text))
     }
+    private static func cursorAfterRecord(_ index: String.Index, in text: String) -> String.Index {
+        text[index...].firstIndex { !$0.isWhitespace } ?? text.endIndex
+    }
+
     static func read(_ data: Data, fallbackName: String, fallbackDate: Date, relativePath: String, contactFile: Bool) throws -> MarkdownContent {
         guard var text = String(data: data, encoding: .utf8) else { throw PlannerError.invalidBackup("\(relativePath) 不是 UTF-8 文字。") }
         var tags: [UUID]?
@@ -108,11 +115,22 @@ enum PlannerMarkdown {
             let headingLine = String(text[start..<split.lowerBound])
             let heading = headingLine.hasPrefix("### ") ? String(headingLine.dropFirst(4)) : String(headingLine.dropFirst(3))
             let body = String(text[split.upperBound..<end.lowerBound])
+            var nextRecord = end.upperBound
             switch meta.kind {
             case "journal":
                 guard let date = meta.date else { throw PlannerError.invalidBackup("日記缺少日期。") }
                 result.journal.append(JournalEntry(id: meta.id, date: date, text: body, language: meta.language ?? "zh"))
-            case "contact": result.contacts.append(Contact(id: meta.id, name: String(heading), details: body, keepHistory: meta.keepHistory ?? false, archived: meta.archived ?? false, tagIDs: tags))
+            case "contact":
+                let remainder = text[cursorAfterRecord(end.upperBound, in: text)...]
+                var birthday: ContactBirthday?
+                if remainder.hasPrefix(birthdayPrefix) {
+                    let lineEnd = remainder.firstIndex(of: "\n") ?? text.endIndex
+                    birthday = ContactBirthday(text: String(remainder[..<lineEnd].dropFirst(birthdayPrefix.count)))
+                    result.hasBirthdayField = true
+                    nextRecord = lineEnd
+                }
+                result.contacts.append(Contact(id: meta.id, name: heading, details: body, keepHistory: meta.keepHistory ?? false,
+                                               archived: meta.archived ?? false, tagIDs: tags, birthday: birthday))
             case "interaction":
                 guard let date = meta.date, let person = meta.contactIDs?.first else { throw PlannerError.invalidBackup("往來缺少日期或聯絡人。") }
                 result.interactions.append(Interaction(id: meta.id, contactID: person, date: date, text: body))
@@ -122,7 +140,7 @@ enum PlannerMarkdown {
                 result.completions.append(CompletionRecord(id: meta.id, taskID: taskID, date: date, title: String(heading), text: detail, domain: meta.domain, goalTitle: meta.goalTitle, contactIDs: meta.contactIDs ?? [], withdrawn: meta.withdrawn, addedToJournal: meta.addedToJournal, journalExcerpt: meta.journalExcerpt))
             default: throw PlannerError.invalidBackup("文件包含較新版本的紀錄，請先更新 Planner。")
             }
-            cursor = end.upperBound
+            cursor = nextRecord
         }
         return result
     }
@@ -130,6 +148,12 @@ enum PlannerMarkdown {
 
 final class MarkdownVault {
     private struct StateVersion: Decodable { let version: Int }
+    private struct PendingSave: Codable {
+        var document: PlannerDocument
+        var deletingContacts: Set<UUID>
+    }
+    private var pendingContactDeletions: Set<UUID> = []
+    private var contactsWithoutBirthdayField: Set<String> = []
     let directory: URL
     private(set) var expected: [String: Data] = [:]
     private var last: PlannerDocument?
@@ -157,6 +181,7 @@ final class MarkdownVault {
     func load() throws -> PlannerDocument? {
         try coordinated(writing: false) {
             expected = [:]; last = nil; repair = false; unreadable = []; warnings = []
+            pendingContactDeletions = []; contactsWithoutBirthdayField = []
             var document = PlannerDocument(), found = false, stateBad = false
             let statePath = ".planner/state.json", pendingPath = ".planner/pending.json"
             if manager.fileExists(atPath: url(statePath).path) {
@@ -169,7 +194,13 @@ final class MarkdownVault {
                 do { document = try decoder.decode(PlannerDocument.self, from: bytes) } catch { stateBad = true }
             }
             if manager.fileExists(atPath: url(pendingPath).path) {
-                document = try PlannerDisk.decode(Data(contentsOf: url(pendingPath)))
+                let bytes = try Data(contentsOf: url(pendingPath))
+                if let pending = try? JSONDecoder().decode(PendingSave.self, from: bytes) {
+                    document = try pending.document.validated()
+                    pendingContactDeletions = pending.deletingContacts
+                } else {
+                    document = try PlannerDisk.decode(bytes)
+                }
                 for path in try markdownPaths(includeBoth: true) { expected[path] = try Data(contentsOf: url(path)) }
                 repair = true
                 last = document
@@ -182,6 +213,10 @@ final class MarkdownVault {
                 do {
                     let part = try PlannerMarkdown.read(bytes, fallbackName: file.deletingPathExtension().lastPathComponent, fallbackDate: (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date(), relativePath: path, contactFile: path.hasPrefix("Contacts/") || path.hasPrefix("人脈/") || ["人脈", "Contacts"].contains(directory.lastPathComponent))
                     markdown.journal += part.journal; markdown.contacts += part.contacts; markdown.interactions += part.interactions; markdown.completions += part.completions
+                    if !part.contacts.isEmpty, !part.hasBirthdayField,
+                       String(decoding: bytes.prefix(64), as: UTF8.self).hasPrefix(PlannerMarkdown.signature) {
+                        contactsWithoutBirthdayField.insert(path)
+                    }
                     expected[path] = bytes; found = true
                 } catch { failures.append(path); expected[path] = bytes; unreadable.insert(path) }
             }
@@ -246,7 +281,7 @@ final class MarkdownVault {
     }
     private func files(_ document: PlannerDocument) throws -> [String: Data] {
         var result: [String: Data]
-        if !repair, !expected.keys.contains(where: { $0.hasPrefix("日記/") || $0.hasPrefix("人脈/") }),
+        if !repair, contactsWithoutBirthdayField.isEmpty, !expected.keys.contains(where: { $0.hasPrefix("日記/") || $0.hasPrefix("人脈/") }),
            let last, last.journal == document.journal, last.contacts == document.contacts,
            last.interactions == document.interactions, last.completions == document.completions {
             result = expected.filter { $0.key.hasSuffix(".md") }
@@ -278,7 +313,7 @@ final class MarkdownVault {
                 var filename = String(name.prefix(60)) + "--" + String(contact.id.uuidString.prefix(8)) + ".md"
                 if result["Contacts/" + filename] != nil { filename = String(name.prefix(60)) + "--" + contact.id.uuidString + ".md" }
                 let path = "Contacts/" + filename
-                if let cached = expected[path], !repair, oldContacts[contact.id] == contact,
+                if let cached = expected[path], !repair, !contactsWithoutBirthdayField.contains(path), oldContacts[contact.id] == contact,
                    oldInteractions[contact.id] == interactions[contact.id], oldPersonRecords[contact.id] == personRecords[contact.id] {
                     result[path] = cached
                 } else {
@@ -314,7 +349,12 @@ final class MarkdownVault {
             let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
             try manager.createDirectory(at: url(".planner"), withIntermediateDirectories: true)
             for folder in ["Journal", "Contacts"] { try manager.createDirectory(at: url(folder), withIntermediateDirectories: true) }
-            try encoder.encode(document).write(to: url(".planner/pending.json"), options: .atomic)
+            let liveContacts = Set(document.contacts.map(\.id))
+            let formerlyLive = Set(last?.contacts.map(\.id) ?? [])
+            let deletingContacts = pendingContactDeletions.union(formerlyLive).subtracting(liveContacts)
+            try encoder.encode(PendingSave(document: document, deletingContacts: deletingContacts))
+                .write(to: url(".planner/pending.json"), options: .atomic)
+            pendingContactDeletions = deletingContacts
             for path in changed.keys.sorted() {
                 let file = url(path)
                 if let previous = expected[path] {
@@ -332,6 +372,11 @@ final class MarkdownVault {
                 expected[path] = desired[path]
             }
             for path in removed {
+                if !deletingContacts.isEmpty, let id = removedContactID(at: path), deletingContacts.contains(id) {
+                    try manager.removeItem(at: url(path))
+                    expected[path] = nil
+                    continue
+                }
                 let archive = url(".planner/封存/\(UUID().uuidString)-\(URL(fileURLWithPath: path).lastPathComponent)")
                 try manager.createDirectory(at: archive.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try manager.moveItem(at: url(path), to: archive)
@@ -339,9 +384,22 @@ final class MarkdownVault {
             }
             try manager.removeItem(at: url(".planner/pending.json"))
             expected = desired; last = document; repair = false
+            pendingContactDeletions = []; contactsWithoutBirthdayField = []
             unreadable.subtract(changed.keys); unreadable.subtract(removed); warnings = Array(unreadable).sorted()
         }
     }
+    private func removedContactID(at path: String) -> UUID? {
+        let personFolders = ["人脈", "Contacts"]
+        guard let bytes = expected[path], path.hasSuffix(".md"), !unreadable.contains(path) else { return nil }
+        let isContactFile = personFolders.contains { path.hasPrefix($0 + "/") }
+            || (!path.contains("/") && (personFolders.contains(directory.lastPathComponent)
+                || String(decoding: bytes.prefix(64), as: UTF8.self).hasPrefix(PlannerMarkdown.signature)))
+        guard isContactFile else { return nil }
+        let file = url(path)
+        return (try? PlannerMarkdown.read(bytes, fallbackName: file.deletingPathExtension().lastPathComponent,
+                                          fallbackDate: Date(), relativePath: path, contactFile: true))?.contacts.first?.id
+    }
+
     static func snapshotFiles(_ document: PlannerDocument) throws -> [String: Data] {
         try MarkdownVault(directory: defaultDirectory).files(document)
     }

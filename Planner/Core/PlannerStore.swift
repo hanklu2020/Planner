@@ -411,7 +411,10 @@ final class PlannerStore: ObservableObject {
         undoToken = token
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(7))
-            if let self, self.undoToken == token { self.clearChangeUndo() }
+            if let self, self.undoToken == token {
+                self.clearChangeUndo()
+                if self.notice == message { self.notice = nil }
+            }
         }
     }
 
@@ -467,6 +470,54 @@ final class PlannerStore: ObservableObject {
         offerUndo("已更新 \(changed.count) 位聯絡人的標籤") { [weak self] in
             _ = self?.applyTags(changed, adding: !adding)
         }
+    }
+
+    func clearTags(for people: Set<UUID>) {
+        let changed = people.reduce(into: [UUID: Set<UUID>]()) { result, id in
+            if let tags = contact(id)?.tagIDs, !tags.isEmpty { result[id] = Set(tags) }
+        }
+        guard !changed.isEmpty, applyTags(changed, adding: false) else { return }
+        offerUndo("已清除 \(changed.count) 位聯絡人的標籤") { [weak self] in
+            _ = self?.applyTags(changed, adding: true)
+        }
+    }
+
+    func contactsChanging(_ field: WritableKeyPath<Contact, Bool>, to value: Bool, among people: Set<UUID>) -> Set<UUID> {
+        Set(people.filter { contact($0).map { $0[keyPath: field] != value } == true })
+    }
+
+    func setContacts(_ field: WritableKeyPath<Contact, Bool>, to value: Bool, among people: Set<UUID>) {
+        let affected = contactsChanging(field, to: value, among: people)
+        guard !affected.isEmpty, applyContactSetting(field, to: value, among: affected) else { return }
+        offerUndo("已更新 \(affected.count) 位聯絡人") { [weak self] in
+            _ = self?.applyContactSetting(field, to: !value, among: affected)
+        }
+    }
+
+    private func applyContactSetting(_ field: WritableKeyPath<Contact, Bool>, to value: Bool, among people: Set<UUID>) -> Bool {
+        commit { document in
+            for index in document.contacts.indices where people.contains(document.contacts[index].id) {
+                document.contacts[index][keyPath: field] = value
+            }
+        }
+    }
+
+    func setBirthday(_ birthday: ContactBirthday?, for id: UUID) -> Bool {
+        guard var contact = contact(id) else { return false }
+        contact.birthday = birthday
+        return saveContact(contact)
+    }
+
+    func deleteContact(_ id: UUID) -> Bool {
+        guard contact(id) != nil else { return false }
+        let removed = commit { document in
+            document.contacts.removeAll { $0.id == id }
+            document.interactions.removeAll { $0.contactID == id }
+            for index in document.tasks.indices { document.tasks[index].contactIDs.removeAll { $0 == id } }
+            for index in document.completions.indices { document.completions[index].contactIDs.removeAll { $0 == id } }
+        }
+        if removed { clearChangeUndo() }
+        return removed
     }
 
     private func applyTags(_ changed: [UUID: Set<UUID>], adding: Bool) -> Bool {
