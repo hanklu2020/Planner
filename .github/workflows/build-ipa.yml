@@ -1,0 +1,28 @@
+name: Build Planner IPA
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build iPhone app
+        run: |
+          xcodegen generate
+          xcodebuild -project Planner.xcodeproj -scheme Planner -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p dist/Payload
+          cp -R build/Build/Products/Release-iphoneos/Planner.app dist/Payload/
+          cd dist
+          /usr/bin/zip -qry Planner.ipa Payload
+          unzip -t Planner.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Planner-IPA
+          path: dist/Planner.ipa
+          if-no-files-found: error
