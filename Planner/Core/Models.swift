@@ -76,11 +76,18 @@ enum PlannerDates {
         calendar.date(byAdding: scale.component, value: value, to: date)!
     }
     static func text(_ date: Date, _ format: String = "M/d", calendar: Calendar = calendar) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_TW")
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.dateFormat = format
+        // Keep formatters local to each thread: fast reuse without cross-thread mutation.
+        let key = "Planner.format.\(calendar.identifier).\(calendar.timeZone.identifier).\(calendar.firstWeekday).\(calendar.minimumDaysInFirstWeek).\(format)"
+        let formatter: DateFormatter
+        if let cached = Thread.current.threadDictionary[key] as? DateFormatter { formatter = cached }
+        else {
+            formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "zh_TW")
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            formatter.dateFormat = format
+            Thread.current.threadDictionary[key] = formatter
+        }
         return formatter.string(from: date)
     }
     static func heading(_ date: Date, scale: TimeScale) -> String {

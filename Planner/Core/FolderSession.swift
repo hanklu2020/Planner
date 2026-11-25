@@ -43,6 +43,8 @@ final class FolderSession {
     func open(_ directory: URL, migrateLegacy: Bool = false) async throws -> OpenedFolder {
         try await perform {
             try self.flushNow()
+            let scoped = directory.startAccessingSecurityScopedResource()
+            defer { if scoped { directory.stopAccessingSecurityScopedResource() } }
             let candidate = MarkdownVault(directory: directory)
             if let document = try candidate.load() {
                 if FileManager.default.fileExists(atPath: directory.appendingPathComponent(".planner/backup.marker").path) {

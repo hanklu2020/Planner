@@ -45,6 +45,7 @@ final class PlannerStore: ObservableObject {
         return MarkdownVault.defaultDirectory
     }
     private func adopt(_ opened: OpenedFolder) throws {
+        var bookmarkWarning: String?
         let root = MarkdownVault.defaultDirectory.standardizedFileURL.path
         let path = opened.directory.standardizedFileURL.path
         if path == root || path.hasPrefix(root + "/") {
@@ -58,12 +59,12 @@ final class PlannerStore: ObservableObject {
                 defaults.set(bookmark, forKey: "Planner.folder.bookmark")
             } catch {
                 defaults.set(Data(), forKey: "Planner.folder.bookmark")
-                self.error = "目前資料夾可用，但無法記住位置；下次開啟時請重新選擇。"
+                bookmarkWarning = "目前資料夾可用，但無法記住位置；下次開啟時請重新選擇。"
             }
             defaults.removeObject(forKey: "Planner.folder.relative")
         }
         data = opened.document; directory = opened.directory
-        recoveryRequired = false; startupReason = ""; error = nil; saveFailed = false
+        recoveryRequired = false; startupReason = ""; error = bookmarkWarning; saveFailed = false
         notice = opened.notice; clearUndo(); pendingGoalID = nil
     }
     func openLastFolder() async {

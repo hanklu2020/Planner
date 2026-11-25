@@ -55,4 +55,4 @@ Data stays on the device. Export a complete backup through **目標 → 設定�
 - The app exposes Documents in Files. App-owned local folders can be removed when uninstalling; put important backups in a separate user-selected location. Files access is limited to the selected folder and remembered using a system bookmark.
 - Settings can clear disposable plans while leaving all Markdown records intact. There is no whole-phone scan, cloud account, server or new permission to read system contacts/calendars.
 
-Validation status for 2.1: local Swift syntax and project configuration checks pass. The new Xcode build, unit tests and simulator tests have NOT run yet because automatic approval review blocked publishing the source changes to the public GitHub repository. The last verified IPA is 2.0.0; this package is reviewable 2.1 source, not a compiled IPA.
+Validation: the GitHub Actions workflow compiles and runs 24 unit tests and two iPhone simulator flows before packaging the Release IPA. Only download the artifact from a successful run. Physical file-provider permission changes and AltStore update installation require a device check.

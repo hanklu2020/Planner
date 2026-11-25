@@ -134,7 +134,8 @@ final class MarkdownTests: XCTestCase {
         // An explicit existing folder is the normal startup path after selection.
         let value = fixture(); try MarkdownVault(directory: root).save(value)
         let store = PlannerStore(defaults: defaults)
-        while store.loading { await Task.yield() }
+        for _ in 0..<2000 { if !store.loading { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        XCTAssertFalse(store.loading)
         await store.openFolder(root)
         XCTAssertFalse(store.recoveryRequired)
         XCTAssertEqual(store.data.journal, value.journal)
@@ -143,7 +144,8 @@ final class MarkdownTests: XCTestCase {
         let loaded = try XCTUnwrap(MarkdownVault(directory: root).load())
         XCTAssertEqual(loaded.completions, value.completions)
         let reopened = PlannerStore(defaults: defaults)
-        while reopened.loading { await Task.yield() }
+        for _ in 0..<2000 { if !reopened.loading { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        XCTAssertFalse(reopened.loading)
         XCTAssertFalse(reopened.recoveryRequired)
         XCTAssertEqual(reopened.data.journal, value.journal)
         await store.startNew(in: root)
