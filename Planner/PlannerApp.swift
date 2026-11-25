@@ -2,89 +2,51 @@ import SwiftUI
 
 @main
 struct PlannerApp: App {
-    var body: some Scene { WindowGroup { ContentView() } }
-}
-
-struct ContentView: View {
-    var body: some View {
-        TabView {
-            RecordView(title: "計畫", hint: "新增今日任務", key: "tasks", checklist: true)
-                .tabItem { Label("計畫", systemImage: "calendar") }
-            RecordView(title: "日記", hint: "新增日記", key: "journal", checklist: false)
-                .tabItem { Label("日記", systemImage: "book") }
-            RecordView(title: "人脈", hint: "新增聯絡人", key: "contacts", checklist: false)
-                .tabItem { Label("人脈", systemImage: "person.2") }
+    @StateObject private var store = PlannerStore()
+    var body: some Scene {
+        WindowGroup {
+            ContentView().environmentObject(store).tint(.plannerAccent)
         }
     }
 }
 
-struct Record: Codable, Identifiable {
-    var id = UUID()
-    var text: String
-    var done = false
-}
-
-struct RecordView: View {
-    let title: String
-    let hint: String
-    let checklist: Bool
-    @AppStorage private var saved: Data
-    @State private var draft = ""
-
-    init(title: String, hint: String, key: String, checklist: Bool) {
-        self.title = title
-        self.hint = hint
-        self.checklist = checklist
-        _saved = AppStorage(wrappedValue: Data(), key)
-    }
-
-    private var records: [Record] {
-        (try? JSONDecoder().decode([Record].self, from: saved)) ?? []
-    }
-    private func store(_ rows: [Record]) {
-        if let data = try? JSONEncoder().encode(rows) { saved = data }
-    }
-    private func add() {
-        let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
-        store(records + [Record(text: value)])
-        draft = ""
-    }
+struct ContentView: View {
+    @EnvironmentObject private var store: PlannerStore
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var tab = 0
+    @State private var showingSettings = false
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    HStack {
-                        TextField(hint, text: $draft).onSubmit(add)
-                        Button(action: add) { Image(systemName: "plus.circle.fill") }
-                            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                }
-                Section {
-                    ForEach(records) { record in
-                        HStack {
-                            if checklist {
-                                Button {
-                                    store(records.map { item in
-                                        var copy = item
-                                        if copy.id == record.id { copy.done.toggle() }
-                                        return copy
-                                    })
-                                } label: {
-                                    Image(systemName: record.done ? "checkmark.circle.fill" : "circle")
-                                }.buttonStyle(.borderless)
-                            }
-                            Text(record.text).strikethrough(record.done)
-                        }
-                    }.onDelete { offsets in
-                        var rows = records
-                        rows.remove(atOffsets: offsets)
-                        store(rows)
-                    }
-                } header: { Text(checklist ? "今日任務" : "紀錄") }
+        TabView(selection: $tab) {
+            GoalsView().tabItem { Label("目標", systemImage: "scope") }.tag(0)
+            PlanView().tabItem { Label("計畫", systemImage: "calendar") }.tag(1)
+            JournalView().tabItem { Label("日記", systemImage: "book.closed") }.tag(2)
+            ContactsView().tabItem { Label("人脈", systemImage: "person.2") }.tag(3)
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if store.recoveryRequired {
+                Button("資料需要還原，點此開啟設定", systemImage: "exclamationmark.icloud") { showingSettings = true }
+                    .font(.callout).padding(10).frame(maxWidth: .infinity).background(.orange.opacity(0.15))
             }
-            .navigationTitle(title)
-            .toolbar { ToolbarItem(placement: .bottomBar) { Text("Planner MVP · 0.0.1").font(.caption).foregroundStyle(.secondary) } }
+        }
+        .overlay(alignment: .bottom) {
+            if let notice = store.notice {
+                HStack {
+                    Text(notice).font(.caption)
+                    Spacer(minLength: 8)
+                    if store.canUndoSchedule { Button("復原") { store.undoSchedule() }.font(.caption.bold()) }
+                    Button { store.notice = nil } label: { Image(systemName: "xmark").font(.caption) }.accessibilityLabel("關閉提示")
+                }
+                .padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, 16).padding(.bottom, 58)
+            }
+        }
+        .alert("無法完成操作", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
+            Button("知道了", role: .cancel) { store.error = nil }
+        } message: { Text(store.error ?? "") }
+        .sheet(isPresented: $showingSettings) { SettingsView() }
+        .onChange(of: scenePhase) { _, value in
+            // Refresh relative dates and overdue indicators after midnight / foregrounding.
+            if value == .active { store.objectWillChange.send() }
         }
     }
 }
