@@ -209,8 +209,7 @@ struct ReviewView: View {
     @State private var notes: [UUID: String] = [:]
     @State private var reviewed: Set<UUID> = []
     @State private var editingTask: TaskPresentation?
-    @State private var scheduleIDs: [UUID] = []
-    @State private var scheduleSheet = false
+    @State private var scheduleBatch: TaskBatch?
     @State private var editingGoal: GoalPresentation?
     private var goals: [Goal] {
         store.data.goals.filter { goal in
@@ -242,7 +241,7 @@ struct ReviewView: View {
                             editingTask = TaskPresentation(task: PlannerTask(domain: goal.domain, goalID: goal.id))
                         }
                         if !tasks.isEmpty {
-                            Button("安排現有任務", systemImage: "calendar") { scheduleIDs = tasks.map(\.id); scheduleSheet = true }
+                            Button("安排現有任務", systemImage: "calendar") { scheduleBatch = TaskBatch(taskIDs: tasks.map(\.id)) }
                         }
                         Menu("記錄決定") {
                             Button("繼續推進") { decide(goal, "繼續推進") }
@@ -258,7 +257,7 @@ struct ReviewView: View {
             .navigationTitle("回顧").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .sheet(item: $editingTask) { TaskEditor(initial: $0.task) }
-            .sheet(isPresented: $scheduleSheet) { SchedulePicker(taskIDs: scheduleIDs) }
+            .sheet(item: $scheduleBatch) { SchedulePicker(taskIDs: $0.taskIDs) }
             .sheet(item: $editingGoal) { GoalEditor(initial: $0.goal) }
         }
     }

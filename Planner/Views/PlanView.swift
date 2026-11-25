@@ -16,9 +16,8 @@ struct PlanView: View {
     @State private var selected: Set<UUID> = []
     @State private var selecting = false
     @State private var editing: TaskPresentation?
-    @State private var picker = false
-    @State private var queue = false
-    @State private var queueIDs: [UUID] = []
+    @State private var picker: TaskBatch?
+    @State private var queue: TaskBatch?
     @State private var dateSheet = false
     @State private var review = false
 
@@ -133,18 +132,18 @@ struct PlanView: View {
                             Button("清除選取") { selected.removeAll() }
                         }
                         Spacer()
-                        Button("安排日期") { picker = true }.disabled(eligibleSelection.isEmpty)
-                        Button("逐項安排") { queueIDs = active.filter { selected.contains($0.id) }.map(\.id); queue = true }.disabled(eligibleSelection.isEmpty)
+                        Button("安排日期") { picker = TaskBatch(taskIDs: eligibleSelection) }.disabled(eligibleSelection.isEmpty)
+                        Button("逐項安排") { queue = TaskBatch(taskIDs: eligibleSelection) }.disabled(eligibleSelection.isEmpty)
                     }.font(.subheadline).padding(14).background(.regularMaterial)
                 } else if filter == .unplanned && !active.isEmpty {
                     Button("連續安排這 \(active.count) 項任務", systemImage: "calendar.badge.plus") {
-                        queueIDs = active.map(\.id); queue = true
+                        queue = TaskBatch(taskIDs: active.map(\.id))
                     }.font(.subheadline.weight(.medium)).frame(maxWidth: .infinity).padding(13).background(.regularMaterial)
                 }
             }
             .sheet(item: $editing) { TaskEditor(initial: $0.task) }
-            .sheet(isPresented: $picker, onDismiss: { selecting = false; selected.removeAll() }) { SchedulePicker(taskIDs: eligibleSelection) }
-            .sheet(isPresented: $queue, onDismiss: { selecting = false; selected.removeAll() }) { SequentialScheduleView(taskIDs: queueIDs) }
+            .sheet(item: $picker, onDismiss: { selecting = false; selected.removeAll() }) { SchedulePicker(taskIDs: $0.taskIDs) }
+            .sheet(item: $queue, onDismiss: { selecting = false; selected.removeAll() }) { SequentialScheduleView(taskIDs: $0.taskIDs) }
             .sheet(isPresented: $dateSheet) { periodPicker }
             .sheet(isPresented: $review, onDismiss: { store.pendingGoalID = nil }) { ReviewView() }
         }

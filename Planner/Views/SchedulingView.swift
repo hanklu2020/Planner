@@ -94,7 +94,7 @@ struct SequentialScheduleView: View {
                 }
                 if let task = current {
                     Section {
-                        Text(task.title).font(.title3.weight(.semibold))
+                        Text(task.title).font(.title3.weight(.semibold)).accessibilityIdentifier("queueTaskTitle")
                         if let domain = task.domain { Label(domain.title, systemImage: domain.symbol).font(.caption).foregroundStyle(domain.color) }
                         if let goal = store.goal(task.goalID) { Text(goal.title).font(.subheadline).foregroundStyle(.secondary) }
                         if let deadline = task.deadline { Text("截止 \(PlannerDates.text(deadline, "yyyy/M/d"))").font(.caption).foregroundStyle(task.isOverdue() ? Color.red : .secondary) }

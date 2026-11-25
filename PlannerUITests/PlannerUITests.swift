@@ -58,11 +58,12 @@ final class PlannerUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
         app.buttons["filter_待安排"].tap()
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "連續安排這")).firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["正在安排"].exists)
+        XCTAssertTrue(app.staticTexts["queueTaskTitle"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["queueTaskTitle"].label, "整理資料\(suffix)")
         app.buttons["今天"].tap()
         XCTAssertTrue(app.staticTexts["這一輪安排完成"].waitForExistence(timeout: 5))
         app.buttons["復原上一項"].tap()
-        XCTAssertTrue(app.staticTexts["整理資料\(suffix)"].exists)
+        XCTAssertEqual(app.staticTexts["queueTaskTitle"].label, "整理資料\(suffix)")
         app.buttons["完成"].tap()
     }
 }

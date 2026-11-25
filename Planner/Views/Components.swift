@@ -37,6 +37,10 @@ struct TaskPresentation: Identifiable {
     var id: UUID { task.id }
     var task: PlannerTask
 }
+struct TaskBatch: Identifiable {
+    let id = UUID()
+    let taskIDs: [UUID]
+}
 struct GoalPresentation: Identifiable {
     var id: UUID { goal.id }
     var goal: Goal
