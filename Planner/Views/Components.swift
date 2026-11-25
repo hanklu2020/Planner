@@ -226,7 +226,7 @@ struct TaskEditor: View {
                 if store.task(value.id) != nil {
                     Section {
                         Button(value.isDone ? "重新開啟任務" : "標記完成") {
-                            if save() { store.toggleDone(value.id); dismiss() }
+                            if save(completing: !value.isDone) { dismiss() }
                         }.disabled(value.cancelled)
                         Button(value.cancelled ? "恢復任務" : "取消任務", role: value.cancelled ? nil : .destructive) {
                             value.cancelled.toggle(); if save() { dismiss() }
@@ -250,13 +250,17 @@ struct TaskEditor: View {
         let title = stepDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }; value.steps.append(Step(title: title)); stepDraft = ""
     }
-    private func save() -> Bool {
+    private func save(completing: Bool? = nil) -> Bool {
         addStep()
         value.schedule = hasSchedule ? Schedule(plannedDate, scale: scale) : nil
         value.deadline = hasDeadline ? PlannerDates.calendar.startOfDay(for: deadline) : nil
         // Editing an unchecked step must reopen a previously completed task.
         if value.steps != originalSteps && !value.steps.isEmpty {
             value.completedAt = value.steps.allSatisfy(\.done) ? (value.completedAt ?? Date()) : nil
+        }
+        if let completing {
+            value.completedAt = completing ? (value.completedAt ?? Date()) : nil
+            if completing { for index in value.steps.indices { value.steps[index].done = true } }
         }
         return store.saveTask(value)
     }
