@@ -5,6 +5,7 @@ struct JournalView: View {
     @State private var visibleDays = 30
     @State private var editing: JournalEntry?
     @State private var search = ""
+    @State private var scrolledToLatest = false
     private var cutoff: Date { PlannerDates.shifted(PlannerDates.calendar.startOfDay(for: Date()), .day, by: -visibleDays) }
     private var entries: [JournalEntry] { store.data.journal.filter { $0.date >= cutoff && (search.isEmpty || $0.text.localizedCaseInsensitiveContains(search)) } }
     private var tasks: [PlannerTask] { store.data.tasks.filter { ($0.completedAt ?? .distantPast) >= cutoff && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) } }
@@ -14,7 +15,10 @@ struct JournalView: View {
         NavigationStack {
             ScrollViewReader { proxy in
                 List {
-                    if hasEarlier { Button("載入更早的紀錄") { visibleDays += 90 } }
+                    if hasEarlier {
+                        Button("載入更早的紀錄") { visibleDays += 90 }
+                            .onAppear { if scrolledToLatest { visibleDays += 90 } }
+                    }
                     if days.isEmpty { EmptyMessage(title: "留下今天的一點記錄", symbol: "book.closed", detail: "可以寫日記；完成的任務也會出現在這裡。") }
                     ForEach(days, id: \.self) { day in
                         Section(PlannerDates.text(day, "yyyy年 M月d日 EEEE")) {
@@ -34,7 +38,10 @@ struct JournalView: View {
                     }
                     Color.clear.frame(height: 1).listRowBackground(Color.clear).id("latest")
                 }.listStyle(.insetGrouped)
-                    .onAppear { proxy.scrollTo("latest", anchor: .bottom) }
+                    .onAppear {
+                        proxy.scrollTo("latest", anchor: .bottom)
+                        DispatchQueue.main.async { scrolledToLatest = true }
+                    }
             }
             .navigationTitle("日記").navigationBarTitleDisplayMode(.inline)
             .searchable(text: $search, prompt: "搜尋日記與完成任務")
@@ -57,6 +64,7 @@ struct JournalEditor: View {
                 Picker("內容語言", selection: $value.language) { Text("中文").tag("zh"); Text("English").tag("en") }
                 Section { TextEditor(text: $value.text).frame(minHeight: 250).accessibilityIdentifier("journalText") }
             }
+            .plannerErrors()
             .navigationTitle("寫日記").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }

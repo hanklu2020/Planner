@@ -32,6 +32,7 @@ struct SchedulePicker: View {
                     Button("放回待安排") { apply(nil) }
                 }
             }
+            .plannerErrors()
             .navigationTitle("安排日期 · \(taskIDs.count) 項").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
         }
@@ -130,6 +131,7 @@ struct SequentialScheduleView: View {
                 }
                 if !history.isEmpty { Section { Button("復原上一項") { undo() } } }
             }
+            .plannerErrors()
             .navigationTitle("連續安排").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { store.clearUndo(); dismiss() } } }
         }

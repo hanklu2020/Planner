@@ -1,5 +1,22 @@
 import SwiftUI
 
+private struct PlannerErrorBanner: View {
+    @EnvironmentObject private var store: PlannerStore
+    var body: some View {
+        if let error = store.error {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.circle.fill")
+                Text(error).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                Button { store.error = nil } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }.accessibilityLabel("關閉錯誤提示")
+            }.foregroundStyle(.red).padding(12).background(Color(uiColor: .secondarySystemBackground))
+        }
+    }
+}
+
+extension View {
+    func plannerErrors() -> some View { safeAreaInset(edge: .top, spacing: 0) { PlannerErrorBanner() } }
+}
+
 extension Color {
     static let plannerAccent = Color(red: 0.18, green: 0.43, blue: 0.35)
 }
@@ -127,7 +144,9 @@ struct TaskEditor: View {
     @State private var deadline: Date
     @State private var showHistory = false
     @State private var sortingSteps = false
+    private let originalSteps: [Step]
     init(initial: PlannerTask) {
+        originalSteps = initial.steps
         _value = State(initialValue: initial)
         _hasSchedule = State(initialValue: initial.schedule != nil)
         _hasDeadline = State(initialValue: initial.deadline != nil)
@@ -216,6 +235,7 @@ struct TaskEditor: View {
                 }
             }
             .environment(\.editMode, .constant(sortingSteps ? .active : .inactive))
+            .plannerErrors()
             .navigationTitle(store.task(value.id) == nil ? "新增任務" : "編輯任務").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
@@ -235,7 +255,9 @@ struct TaskEditor: View {
         value.schedule = hasSchedule ? Schedule(plannedDate, scale: scale) : nil
         value.deadline = hasDeadline ? PlannerDates.calendar.startOfDay(for: deadline) : nil
         // Editing an unchecked step must reopen a previously completed task.
-        if value.isDone && value.steps.contains(where: { !$0.done }) { value.completedAt = nil }
+        if value.steps != originalSteps && !value.steps.isEmpty {
+            value.completedAt = value.steps.allSatisfy(\.done) ? (value.completedAt ?? Date()) : nil
+        }
         return store.saveTask(value)
     }
 }

@@ -51,6 +51,9 @@ struct PlanView: View {
     private var eligibleSelection: [UUID] { store.data.tasks.filter { selected.contains($0.id) && $0.isOpen }.map(\.id) }
 
     var body: some View {
+        let rows = matching
+        let active = rows.filter(\.isOpen)
+        let done = rows.filter(\.isDone)
         NavigationStack {
             VStack(spacing: 0) {
                 dateHeader
@@ -235,14 +238,16 @@ struct MonthGrid: View {
     private var offset: Int { (calendar.component(.weekday, from: first) - calendar.firstWeekday + 7) % 7 }
     private var days: Int { calendar.range(of: .day, in: .month, for: first)!.count }
     var body: some View {
+        let counts = Dictionary(grouping: store.data.tasks.filter { $0.isOpen && $0.schedule?.scale == .day }, by: { calendar.startOfDay(for: $0.schedule!.date) }).mapValues(\.count)
+        let goalDays = Set(store.data.goals.compactMap { $0.targetDate.map { calendar.startOfDay(for: $0) } })
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 7), spacing: 5) {
             ForEach(Array(["一", "二", "三", "四", "五", "六", "日"].enumerated()), id: \.offset) { _, day in Text(day).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity) }
             ForEach(0..<(offset + days), id: \.self) { index in
                 if index < offset { Color.clear.frame(height: 43) }
                 else {
                     let date = PlannerDates.shifted(first, .day, by: index - offset)
-                    let count = store.data.tasks.filter { $0.isOpen && $0.schedule?.appears(in: date, scale: .day) == true }.count
-                    let target = store.data.goals.contains { goal in goal.targetDate.map { calendar.isDate($0, inSameDayAs: date) } == true }
+                    let count = counts[calendar.startOfDay(for: date)] ?? 0
+                    let target = goalDays.contains(calendar.startOfDay(for: date))
                     Button { select(date) } label: {
                         VStack(spacing: 3) {
                             Text("\(index - offset + 1)").font(.subheadline.weight(calendar.isDateInToday(date) ? .bold : .regular))

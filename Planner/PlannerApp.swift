@@ -40,9 +40,7 @@ struct ContentView: View {
                 .padding(.horizontal, 16).padding(.bottom, 58)
             }
         }
-        .alert("無法完成操作", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
-            Button("知道了", role: .cancel) { store.error = nil }
-        } message: { Text(store.error ?? "") }
+        .plannerErrors()
         .sheet(isPresented: $showingSettings) { SettingsView() }
         .onChange(of: scenePhase) { _, value in
             // Refresh relative dates and overdue indicators after midnight / foregrounding.

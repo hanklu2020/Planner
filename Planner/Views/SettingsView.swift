@@ -46,6 +46,7 @@ struct SettingsView: View {
                     Text("未完成任務會留在待處理，不會自動堆到明天；目標需自行確認達成。")
                 }.font(.subheadline)
             }
+            .plannerErrors()
             .navigationTitle("設定與備份").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .fileExporter(isPresented: $export, document: backup, contentType: .json, defaultFilename: "Planner-\(PlannerDates.text(Date(), "yyyy-MM-dd-HHmm"))") { result in

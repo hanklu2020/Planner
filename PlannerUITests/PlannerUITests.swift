@@ -9,6 +9,7 @@ final class PlannerUITests: XCTestCase {
         for name in ["目標", "計畫", "日記", "人脈"] { XCTAssertTrue(app.tabBars.buttons[name].exists) }
         XCTAssertTrue(app.buttons["domain_spiritual"].exists)
         XCTAssertTrue(app.buttons["domain_work"].exists)
+        let home = XCTAttachment(screenshot: app.screenshot()); home.name = "Goals-home"; home.lifetime = .keepAlways; add(home)
         app.buttons["domain_intellectual"].tap()
         app.buttons["新增目標"].tap()
         let title = "測試日文目標 \(UUID().uuidString.prefix(4))"

@@ -120,6 +120,7 @@ struct GoalEditor: View {
                     Section { Picker("狀態", selection: $value.status) { ForEach(GoalStatus.allCases) { Text($0.title).tag($0) } } }
                 }
             }
+            .plannerErrors()
             .navigationTitle(store.goal(value.id) == nil ? "新增目標" : "編輯目標").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
@@ -253,6 +254,7 @@ struct ReviewView: View {
                     } header: { Text(goal.domain.title) }
                 }
             }
+            .plannerErrors()
             .navigationTitle("回顧").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .sheet(item: $editingTask) { TaskEditor(initial: $0.task) }

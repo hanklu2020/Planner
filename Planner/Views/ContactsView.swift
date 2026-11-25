@@ -55,6 +55,7 @@ struct ContactEditor: View {
                     Toggle("封存聯絡人", isOn: $value.archived)
                 } footer: { Text("封存後仍保留往來與任務關聯。保留長期紀錄可避免手動清理舊往來。") }
             }
+            .plannerErrors()
             .navigationTitle("聯絡人").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
@@ -146,6 +147,7 @@ struct InteractionEditor: View {
                 DatePicker("日期", selection: $value.date, displayedComponents: .date)
                 TextEditor(text: $value.text).frame(minHeight: 220).accessibilityIdentifier("interactionText")
             }
+            .plannerErrors()
             .navigationTitle("記錄往來").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }

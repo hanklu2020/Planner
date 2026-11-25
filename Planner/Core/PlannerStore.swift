@@ -79,6 +79,7 @@ final class PlannerStore: ObservableObject {
             else { document.tasks.append(value) }
         }
         if success && !value.isDone && pendingGoalID == value.goalID { pendingGoalID = nil }
+        if success && value.isDone { checkGoal(value.goalID) }
         return success
     }
     func moveTasks(for goalID: UUID, from offsets: IndexSet, to destination: Int) {
