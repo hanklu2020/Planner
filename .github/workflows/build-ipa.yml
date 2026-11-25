@@ -45,14 +45,14 @@ jobs:
           assert info['UIFileSharingEnabled'] is True
           assert info['LSSupportsOpeningDocumentsInPlace'] is True
           assert info['CFBundleIdentifier'] == 'com.personalplanner.mvp'
-          assert info['CFBundleShortVersionString'] == '2.3.0'
-          assert str(info['CFBundleVersion']) == '230'
+          assert info['CFBundleShortVersionString'] == '2.4.0'
+          assert str(info['CFBundleVersion']) == '240'
           PYTHON
           cd dist
-          /usr/bin/zip -qry Planner-2.3.0.ipa Payload
-          unzip -t Planner-2.3.0.ipa
+          /usr/bin/zip -qry Planner-2.4.0.ipa Payload
+          unzip -t Planner-2.4.0.ipa
       - uses: actions/upload-artifact@v4
         with:
           name: Planner-IPA
-          path: dist/Planner-2.3.0.ipa
+          path: dist/Planner-2.4.0.ipa
           if-no-files-found: error

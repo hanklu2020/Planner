@@ -28,9 +28,29 @@ struct ContactCriteria: Hashable {
     }
 }
 
+enum ContactMapScope: Hashable {
+    case filtered(ContactCriteria, category: String?)
+    case person(UUID)
+
+    var circles: ContactMapCircles {
+        switch self {
+        case .filtered(_, let category): return .category(category)
+        case .person(let id): return .person(id)
+        }
+    }
+
+    func criteria(in contacts: [UUID: Contact]) -> ContactCriteria {
+        switch self {
+        case .filtered(let criteria, _): return criteria
+        case .person(let id): return ContactCriteria(scope: contacts[id]?.archived == true ? .archived : .active)
+        }
+    }
+}
+
 enum ContactRoute: Hashable {
     case person(UUID), category(String), members(UUID, ContactCriteria)
     case circleBirthdays(UUID, ContactCriteria), focusMap(UUID), focusBirthday(UUID)
+    case mapResult(ContactMapSelection, ContactMapScope)
 }
 
 @MainActor
@@ -72,7 +92,6 @@ struct ContactsView: View {
     @State private var visited: Set<ContactMode> = [.list]
     @State private var selection = ContactSelection()
     @State private var newCategory = false
-    @State private var preview: ContactTag?
     @State private var mapCategory: String?
     @State private var path: [ContactRoute] = []
 
@@ -99,13 +118,6 @@ struct ContactsView: View {
             .navigationDestination(for: ContactRoute.self, destination: destination)
             .sheet(item: $editing) { ContactEditor(initial: $0, isNew: true) { push(.person($0)) } }
             .sheet(isPresented: $newCategory) { TagCategoryEditor() }
-            .sheet(item: $preview) { tag in
-                CirclePreview(tag: tag, criteria: criteria) { route in
-                    preview = nil
-                    push(route)
-                }
-                .presentationDetents([.medium, .large])
-            }
         }
         .safeAreaInset(edge: .top, spacing: 0) { PlannerNotice() }
         .onChange(of: criteria) { _, _ in selection.ids.removeAll() }
@@ -230,12 +242,7 @@ struct ContactsView: View {
         case .tags:
             categories
         case .map:
-            let ids = Set(people.map(\.id))
-            ContactCircleMap(counts: circleCounts(for: ids), open: { preview = $0 }) {
-                if !people.isEmpty {
-                    Button("查看這 \(people.count) 位聯絡人") { show(.list) }
-                }
-            }
+            setMap(people: people, scope: .filtered(criteria, category: mapCategory))
         }
     }
 
@@ -272,12 +279,16 @@ struct ContactsView: View {
             .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
     }
 
-    private func circleCounts(for people: Set<UUID>, tags: Set<UUID>? = nil, applyCategory: Bool = true) -> [UUID: Int] {
-        store.tags.tags.reduce(into: [:]) { result, tag in
-            guard tags?.contains(tag.id) != false, !applyCategory || mapCategory == nil || tag.categoryID == mapCategory else { return }
-            let count = (store.contactIndex.members[tag.id] ?? []).intersection(people).count
-            if count > 0 { result[tag.id] = count }
-        }
+    private func setMap(people: [Contact], scope: ContactMapScope) -> some View {
+        let index = store.contactIndex
+        let tags = scope.circles.tagIDs(in: store.tags, contacts: index.byID)
+        let map = ContactSetMap(universe: Set(people.map(\.id)), tags: tags, memberships: index.members)
+        let tagScope = ContactCriteria(scope: scope.criteria(in: index.byID).scope == .archived ? .archived : .active)
+        return ContactSetMapView(map: map, catalog: store.tags, openTag: {
+            push(.members($0, tagScope))
+        }, openResult: {
+            push(.mapResult($0, scope))
+        })
     }
 
     private func push(_ route: ContactRoute) { path.append(route) }
@@ -305,15 +316,34 @@ struct ContactsView: View {
             ScopedBirthdays(title: store.contact(id)?.name ?? "生日", people: [store.contact(id)].compactMap { $0 })
         case .focusMap(let id):
             if let person = store.contact(id) {
-                let scope = ContactCriteria(scope: person.archived ? .archived : .active)
-                let ids = Set(ContactDirectory.people(store, in: scope).map(\.id))
-                ContactCircleMap(counts: circleCounts(for: ids, tags: Set(person.tagIDs ?? []), applyCategory: false), open: {
-                    push(.members($0.id, scope))
-                }) {
-                    NavigationLink("查看 \(person.name)", value: ContactRoute.person(person.id))
-                }.navigationTitle("\(person.name)的圈子").navigationBarTitleDisplayMode(.inline)
+                let scope = ContactMapScope.person(id)
+                let criteria = scope.criteria(in: store.contactIndex.byID)
+                setMap(people: ContactDirectory.people(store, in: criteria), scope: scope)
+                    .navigationTitle("\(person.name)的圈子").navigationBarTitleDisplayMode(.inline)
             }
+        case .mapResult(let filter, let scope):
+            let index = store.contactIndex
+            let universe = ContactDirectory.people(store, in: scope.criteria(in: index.byID))
+            let tags = scope.circles.tagIDs(in: store.tags, contacts: index.byID)
+            let ids = ContactSetMap.people(for: filter, in: Set(universe.map(\.id)), tags: tags, memberships: index.members)
+            ContactSetResults(title: resultTitle(filter), excludesOtherCircles: isExact(filter),
+                              people: universe.filter { ids.contains($0.id) })
         }
+    }
+    private func resultTitle(_ selection: ContactMapSelection) -> String {
+        switch selection {
+        case .union: return "圈內聯集"
+        case .outside: return "不在圖中任何圈"
+        case .exact(let tags):
+            let catalog = store.tags
+            let names = Dictionary(uniqueKeysWithValues: catalog.tags.map { ($0.id, catalog.name(for: $0)) })
+            return "只在 " + tags.compactMap { names[$0] }.joined(separator: " ＋ ")
+        }
+    }
+
+    private func isExact(_ selection: ContactMapSelection) -> Bool {
+        if case .exact = selection { return true }
+        return false
     }
 }
 
