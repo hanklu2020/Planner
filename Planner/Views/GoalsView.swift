@@ -141,6 +141,7 @@ struct GoalDetailView: View {
     @State private var editingTask: TaskPresentation?
     @State private var showDone = false
     @State private var review = false
+    @State private var taskOrder: EditMode = .inactive
     var body: some View {
         if let goal = store.goal(goalID) {
             List {
@@ -154,9 +155,17 @@ struct GoalDetailView: View {
                 Section {
                     Text(store.progress(for: goalID)).font(.subheadline)
                     ForEach(store.tasks(for: goalID).filter(\.isOpen)) { TaskRow(task: $0) }
+                        .onMove { store.moveTasks(for: goalID, from: $0, to: $1) }
                     Button("加入任務", systemImage: "plus") { addTask(goal) }.accessibilityIdentifier("addGoalTask")
                 } header: { Text("下一步與任務") }
                 let done = store.tasks(for: goalID).filter(\.isDone)
+                if !done.isEmpty && store.tasks(for: goalID).allSatisfy(\.isDone) && goal.status == .active {
+                    Section {
+                        Text("任務已全部完成，目標是否達成？").font(.subheadline)
+                        Button("確認達成") { _ = store.review(goalID, decision: "確認達成", note: "", status: .achieved); store.pendingGoalID = nil }
+                        Button("新增下一步") { addTask(goal) }
+                    }
+                }
                 if !done.isEmpty {
                     DisclosureGroup("已完成（\(done.count)）", isExpanded: $showDone) { ForEach(done) { TaskRow(task: $0) } }
                 }
@@ -176,8 +185,14 @@ struct GoalDetailView: View {
                     }
                 }
             }
+            .environment(\.editMode, $taskOrder)
             .navigationTitle("目標內容").navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("編輯") { editGoal = true } }
+            .toolbar {
+                Menu {
+                    Button("編輯目標") { editGoal = true }
+                    Button(taskOrder == .active ? "完成排序" : "調整任務順序") { taskOrder = taskOrder == .active ? .inactive : .active }
+                } label: { Image(systemName: "ellipsis.circle") }.accessibilityLabel("目標選項")
+            }
             .sheet(isPresented: $editGoal) { GoalEditor(initial: goal) }
             .sheet(item: $editingTask) { TaskEditor(initial: $0.task) }
             .sheet(isPresented: $review) { ReviewView(onlyGoalID: goalID) }

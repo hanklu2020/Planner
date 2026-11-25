@@ -52,11 +52,13 @@ final class PlannerStore: ObservableObject {
         guard !value.title.isEmpty else { return false }
         if value.status == .achieved { value.achievedAt = value.achievedAt ?? Date() }
         else { value.achievedAt = nil }
-        return commit { document in
+        let success = commit { document in
             if let index = document.goals.firstIndex(where: { $0.id == value.id }) { document.goals[index] = value }
             else { document.goals.append(value) }
             for i in document.tasks.indices where document.tasks[i].goalID == value.id { document.tasks[i].domain = value.domain }
         }
+        if success && value.status != .active && pendingGoalID == value.id { pendingGoalID = nil }
+        return success
     }
     @discardableResult
     func saveTask(_ value: PlannerTask) -> Bool {
@@ -64,6 +66,7 @@ final class PlannerStore: ObservableObject {
         value.title = value.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.title.isEmpty else { return false }
         value.steps.removeAll { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if value.cancelled { value.completedAt = nil; value.focusDate = nil }
         if let goal = goal(value.goalID) { value.domain = goal.domain }
         if let old = task(value.id) {
             value.planningHistory = old.planningHistory
@@ -71,9 +74,19 @@ final class PlannerStore: ObservableObject {
                 value.planningHistory.append(PlanningChange(previous: old.schedule, next: value.schedule))
             }
         }
-        return commit { document in
+        let success = commit { document in
             if let index = document.tasks.firstIndex(where: { $0.id == value.id }) { document.tasks[index] = value }
             else { document.tasks.append(value) }
+        }
+        if success && !value.isDone && pendingGoalID == value.goalID { pendingGoalID = nil }
+        return success
+    }
+    func moveTasks(for goalID: UUID, from offsets: IndexSet, to destination: Int) {
+        _ = commit { document in
+            let indices = document.tasks.indices.filter { document.tasks[$0].goalID == goalID && document.tasks[$0].isOpen }
+            var tasks = indices.map { document.tasks[$0] }
+            tasks.move(fromOffsets: offsets, toOffset: destination)
+            for (index, task) in zip(indices, tasks) { document.tasks[index] = task }
         }
     }
     func toggleDone(_ id: UUID) {
@@ -129,7 +142,7 @@ final class PlannerStore: ObservableObject {
         let calendar = PlannerDates.calendar
         if let current = task.focusDate, calendar.isDate(current, inSameDayAs: date) { task.focusDate = nil }
         else {
-            let count = data.tasks.filter { $0.isOpen && $0.focusDate.map { calendar.isDate($0, inSameDayAs: date) } == true }.count
+            let count = data.tasks.filter { $0.isOpen && $0.schedule?.appears(in: date, scale: .day) == true && $0.focusDate.map { calendar.isDate($0, inSameDayAs: date) } == true }.count
             guard count < 3 else { error = "這一天已選了三件重點，請先取消其中一件。"; return }
             task.focusDate = calendar.startOfDay(for: date)
         }

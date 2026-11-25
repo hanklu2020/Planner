@@ -65,7 +65,7 @@ struct TaskRow: View {
                         if let domain = task.domain { Text(domain.title).foregroundStyle(domain.color) }
                         if let goal = store.goal(task.goalID) { Text(goal.title).lineLimit(1) }
                         if !task.steps.isEmpty { Text(task.stepProgress).monospacedDigit() }
-                        if task.focusDate.map({ PlannerDates.calendar.isDateInToday($0) }) == true && task.isOpen {
+                        if task.focusDate.map({ PlannerDates.calendar.isDateInToday($0) }) == true && task.isOpen && task.schedule?.appears(in: Date(), scale: .day) == true {
                             Image(systemName: "star.fill").foregroundStyle(.orange).accessibilityLabel("今日重點")
                         }
                     }.font(.caption).foregroundStyle(.secondary)
@@ -126,6 +126,7 @@ struct TaskEditor: View {
     @State private var scale: TimeScale
     @State private var deadline: Date
     @State private var showHistory = false
+    @State private var sortingSteps = false
     init(initial: PlannerTask) {
         _value = State(initialValue: initial)
         _hasSchedule = State(initialValue: initial.schedule != nil)
@@ -166,7 +167,7 @@ struct TaskEditor: View {
                     Toggle("設定截止日期", isOn: $hasDeadline)
                     if hasDeadline { DatePicker("截止日期", selection: $deadline, displayedComponents: .date) }
                 }
-                Section("步驟") {
+                Section {
                     ForEach($value.steps) { $step in
                         HStack {
                             Button { step.done.toggle() } label: { Image(systemName: step.done ? "checkmark.square.fill" : "square") }.buttonStyle(.borderless)
@@ -178,6 +179,8 @@ struct TaskEditor: View {
                         Button(action: addStep) { Image(systemName: "plus.circle.fill") }.accessibilityLabel("新增步驟")
                             .disabled(stepDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
+                } header: {
+                    HStack { Text("步驟"); Spacer(); if value.steps.count > 1 { Button(sortingSteps ? "完成排序" : "排序") { sortingSteps.toggle() }.textCase(nil) } }
                 }
                 if !store.data.contacts.isEmpty {
                     Section("相關聯絡人") {
@@ -212,6 +215,7 @@ struct TaskEditor: View {
                     }
                 }
             }
+            .environment(\.editMode, .constant(sortingSteps ? .active : .inactive))
             .navigationTitle(store.task(value.id) == nil ? "新增任務" : "編輯任務").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
