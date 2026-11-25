@@ -35,8 +35,9 @@ struct ContentView: View {
                 HStack {
                     Text(notice).font(.caption)
                     Spacer(minLength: 8)
-                    if store.canUndoSchedule { Button("復原") { store.undoSchedule() }.font(.caption.bold()) }
-                    Button { store.notice = nil } label: { Image(systemName: "xmark").font(.caption) }.accessibilityLabel("關閉提示")
+                    if store.canUndoChange { Button("復原") { store.undoChange() }.font(.caption.bold()) }
+                    else if store.canUndoSchedule { Button("復原") { store.undoSchedule() }.font(.caption.bold()) }
+                    Button { store.notice = nil; store.clearChangeUndo() } label: { Image(systemName: "xmark").font(.caption) }.accessibilityLabel("關閉提示")
                 }
                 .padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                 .padding(.horizontal, 16).padding(.bottom, 58)

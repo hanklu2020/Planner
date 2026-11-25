@@ -66,6 +66,7 @@ struct TaskRow: View {
     @State private var editing: TaskPresentation?
     @State private var scheduling = false
     @State private var expanded = false
+    @State private var confirmDelete = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -130,6 +131,14 @@ struct TaskRow: View {
                 }
             }
             Button("編輯任務", systemImage: "pencil") { editing = TaskPresentation(task: task) }
+            Button(role: .destructive) { confirmDelete = true } label: { Label("刪除任務", systemImage: "trash") }
+        }
+        .swipeActions(allowsFullSwipe: false) {
+            if !selecting { Button("刪除", role: .destructive) { confirmDelete = true } }
+        }
+        .alert("刪除任務？", isPresented: $confirmDelete) {
+            Button("刪除任務", role: .destructive) { store.deleteTask(task.id) }
+            Button("取消", role: .cancel) { }
         }
         .sheet(item: $editing) { TaskEditor(initial: $0.task) }
         .sheet(isPresented: $scheduling) { SchedulePicker(taskIDs: [task.id]) }
@@ -140,7 +149,8 @@ struct TaskEditor: View {
     @EnvironmentObject private var store: PlannerStore
     @Environment(\.dismiss) private var dismiss
     @State private var value: PlannerTask
-    @State private var stepDraft = ""
+    @FocusState private var focusedStep: UUID?
+    @State private var confirmDelete = false
     @State private var hasSchedule: Bool
     @State private var hasDeadline: Bool
     @State private var plannedDate: Date
@@ -169,10 +179,10 @@ struct TaskEditor: View {
                     Picker("目標", selection: $value.goalID) {
                         Text("獨立任務").tag(nil as UUID?)
                         ForEach(store.data.goals.filter { $0.status == .active || $0.id == value.goalID }) { goal in
-                            Text("\(goal.domain.title) · \(goal.title)").tag(Optional(goal.id))
+                            Text("\(goal.domainTitle) · \(goal.title)").tag(Optional(goal.id))
                         }
                     }
-                    if let goal = store.goal(value.goalID) { LabeledContent("領域", value: goal.domain.title) }
+                    if let goal = store.goal(value.goalID) { LabeledContent("領域", value: goal.domainTitle) }
                     else {
                         Picker("領域", selection: $value.domain) {
                             Text("未分類").tag(nil as Domain?)
@@ -195,13 +205,16 @@ struct TaskEditor: View {
                         HStack {
                             Button { step.done.toggle() } label: { Image(systemName: step.done ? "checkmark.square.fill" : "square") }.buttonStyle(.borderless)
                             TextField("步驟內容", text: $step.title)
+                                .focused($focusedStep, equals: step.id)
+                                .onSubmit { focusedStep = nil }
+                                .accessibilityIdentifier("stepTitle")
                         }
                     }.onDelete { value.steps.remove(atOffsets: $0) }.onMove { value.steps.move(fromOffsets: $0, toOffset: $1) }
-                    HStack {
-                        TextField("新增步驟", text: $stepDraft).onSubmit(addStep).accessibilityIdentifier("stepTitle")
-                        Button(action: addStep) { Image(systemName: "plus.circle.fill") }.accessibilityLabel("新增步驟")
-                            .disabled(stepDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
+                    Button("新增步驟", systemImage: "plus") {
+                        let step = Step(title: "")
+                        value.steps.append(step)
+                        focusedStep = step.id
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 } header: {
                     HStack { Text("步驟"); Spacer(); if value.steps.count > 1 { Button(sortingSteps ? "完成排序" : "排序") { sortingSteps.toggle() }.textCase(nil) } }
                 }
@@ -235,8 +248,13 @@ struct TaskEditor: View {
                         Button(value.cancelled ? "恢復任務" : "取消任務", role: value.cancelled ? nil : .destructive) {
                             value.cancelled.toggle(); if save() { dismiss() }
                         }
+                        Button("刪除任務", role: .destructive) { confirmDelete = true }
                     }
                 }
+            }
+            .alert("刪除任務？", isPresented: $confirmDelete) {
+                Button("刪除任務", role: .destructive) { store.deleteTask(value.id); dismiss() }
+                Button("取消", role: .cancel) { }
             }
             .environment(\.editMode, .constant(sortingSteps ? .active : .inactive))
             .plannerErrors()
@@ -250,12 +268,8 @@ struct TaskEditor: View {
             }
         }
     }
-    private func addStep() {
-        let title = stepDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else { return }; value.steps.append(Step(title: title)); stepDraft = ""
-    }
     private func save(completing: Bool? = nil) -> Bool {
-        addStep()
+        value.steps.removeAll { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         value.schedule = hasSchedule ? Schedule(plannedDate, scale: scale) : nil
         value.deadline = hasDeadline ? PlannerDates.calendar.startOfDay(for: deadline) : nil
         // Editing an unchecked step must reopen a previously completed task.

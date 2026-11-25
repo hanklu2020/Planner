@@ -20,10 +20,12 @@ struct PlanView: View {
     @State private var queue: TaskBatch?
     @State private var dateSheet = false
     @State private var review = false
+    @State private var ordering = false
 
     private var matching: [PlannerTask] {
         store.data.tasks.filter { task in
-            guard domain == nil || task.domain == domain, goalID == nil || task.goalID == goalID else { return false }
+            guard goalID == nil || task.goalID == goalID else { return false }
+            if let domain, !(store.goal(task.goalID)?.domains.contains(domain) ?? (task.domain == domain)) { return false }
             if !search.isEmpty {
                 let text = [task.title, task.notes, store.goal(task.goalID)?.title ?? ""] + task.steps.map(\.title)
                 guard text.joined(separator: " ").localizedCaseInsensitiveContains(search) else { return false }
@@ -35,12 +37,10 @@ struct PlanView: View {
             case .all: return true
             }
         }.sorted { a, b in
-            let af = a.focusDate.map { PlannerDates.calendar.isDate($0, inSameDayAs: anchor) } == true
-            let bf = b.focusDate.map { PlannerDates.calendar.isDate($0, inSameDayAs: anchor) } == true
-            if af != bf { return af }
-            if a.isOverdue() != b.isOverdue() { return a.isOverdue() }
             let ad = a.schedule?.date ?? .distantFuture, bd = b.schedule?.date ?? .distantFuture
-            return ad == bd ? a.createdAt < b.createdAt : ad < bd
+            if ad != bd { return ad < bd }
+            if a.schedule?.scale != b.schedule?.scale { return (a.schedule?.scale.rank ?? 4) < (b.schedule?.scale.rank ?? 4) }
+            return PlannerStore.planBefore(a, b)
         }
     }
     private var active: [PlannerTask] { matching.filter(\.isOpen) }
@@ -102,7 +102,7 @@ struct PlanView: View {
             }
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("計畫").navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $search, prompt: "搜尋任務、目標或步驟")
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜尋任務、目標或步驟")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(selecting ? "取消選取" : "選取") { selecting.toggle(); selected.removeAll() }
@@ -130,6 +130,7 @@ struct PlanView: View {
                         Menu("已選 \(eligibleSelection.count) 項") {
                             Button("選取目前全部任務") { selected.formUnion(active.map(\.id)) }
                             Button("清除選取") { selected.removeAll() }
+                            Button("排序目前任務") { ordering = true }.disabled(active.count < 2)
                         }
                         Spacer()
                         Button("安排日期") { picker = TaskBatch(taskIDs: eligibleSelection) }.disabled(eligibleSelection.isEmpty)
@@ -145,6 +146,7 @@ struct PlanView: View {
             .sheet(item: $picker, onDismiss: { selecting = false; selected.removeAll() }) { SchedulePicker(taskIDs: $0.taskIDs) }
             .sheet(item: $queue, onDismiss: { selecting = false; selected.removeAll() }) { SequentialScheduleView(taskIDs: $0.taskIDs) }
             .sheet(isPresented: $dateSheet) { periodPicker }
+            .sheet(isPresented: $ordering) { orderSheet }
             .sheet(isPresented: $review, onDismiss: { store.pendingGoalID = nil }) { ReviewView() }
         }
     }
@@ -183,6 +185,28 @@ struct PlanView: View {
     private func row(_ task: PlannerTask) -> some View {
         TaskRow(task: task, selecting: selecting, selected: selected.contains(task.id), onSelect: { toggle(task.id) }, onLongPress: { selecting = true; selected.insert(task.id) })
     }
+    private var orderSheet: some View {
+        let tasks = active
+        let groups = Dictionary(grouping: tasks, by: \.schedule)
+        let schedules = tasks.reduce(into: [Schedule?]()) { values, task in
+            if !values.contains(task.schedule) { values.append(task.schedule) }
+        }
+        return NavigationStack {
+            List {
+                ForEach(schedules, id: \.self) { schedule in
+                    let rows = groups[schedule] ?? []
+                    Section(schedule?.label ?? "待安排") {
+                        ForEach(rows) { Text($0.title) }
+                            .onMove { store.movePlanTasks(rows, from: $0, to: $1) }
+                    }
+                }
+            }
+            .environment(\.editMode, .constant(.active))
+            .navigationTitle("任務排序").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { ordering = false } } }
+        }
+    }
+
     private func toggle(_ id: UUID) { if selected.contains(id) { selected.remove(id) } else { selected.insert(id) } }
     private func shift(_ value: Int) { anchor = PlannerDates.shifted(anchor, scale, by: value); filter = .scheduled }
     private func addTask() {

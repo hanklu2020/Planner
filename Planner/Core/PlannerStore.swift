@@ -3,7 +3,20 @@ import UIKit
 
 @MainActor
 final class PlannerStore: ObservableObject {
-    @Published private(set) var data = PlannerDocument()
+    @Published private(set) var data = PlannerDocument() {
+        didSet {
+            contactIndex.update(from: oldValue, to: data)
+            journalIndex.update(from: oldValue, to: data)
+        }
+    }
+    private(set) var contactIndex = ContactTagIndex()
+    private(set) var journalIndex = JournalSearchIndex()
+    var tags: ContactTagCatalog { data.tagCatalog ?? ContactTagCatalog() }
+    @Published private(set) var recentTags: [UUID] = []
+    @Published private(set) var canUndoChange = false
+    private var changeUndo: (() -> Void)?
+    private var undoToken = UUID()
+
     @Published var error: String?
     @Published private(set) var recoveryRequired = false
     @Published var pendingGoalID: UUID?
@@ -20,7 +33,7 @@ final class PlannerStore: ObservableObject {
     private let files: FolderSession
     private var saveRevision = 0
     private var backgroundID: UIBackgroundTaskIdentifier = .invalid
-    private var scheduleUndo: [(id: UUID, schedule: Schedule?)] = []
+    private var scheduleUndo: [(id: UUID, schedule: Schedule?, order: Int?)] = []
 
     init(folderStorage: Bool = true, disk: PlannerDisk = .standard, defaults: UserDefaults = .standard) {
         self.disk = disk; self.defaults = defaults; self.folderStorage = folderStorage
@@ -65,7 +78,7 @@ final class PlannerStore: ObservableObject {
         }
         data = opened.document; directory = opened.directory
         recoveryRequired = false; startupReason = ""; error = bookmarkWarning; saveFailed = false
-        notice = opened.notice; clearUndo(); pendingGoalID = nil
+        notice = opened.notice; clearUndo(); clearChangeUndo(); recentTags = []; pendingGoalID = nil
     }
     func openLastFolder() async {
         guard !isSaving else { return }
@@ -121,7 +134,7 @@ final class PlannerStore: ObservableObject {
     func commit(_ change: (inout PlannerDocument) -> Void) -> Bool {
         guard !recoveryRequired, !loading else { error = "請先選擇資料夾或重新開始。"; return false }
         var next = data; change(&next)
-        if folderStorage { next.captureCompletions() }
+        next.captureCompletions()
         do {
             _ = try next.validated()
             if folderStorage {
@@ -139,7 +152,7 @@ final class PlannerStore: ObservableObject {
     }
     func task(_ id: UUID) -> PlannerTask? { data.tasks.first { $0.id == id } }
     func goal(_ id: UUID?) -> Goal? { data.goals.first { $0.id == id } }
-    func contact(_ id: UUID) -> Contact? { data.contacts.first { $0.id == id } }
+    func contact(_ id: UUID) -> Contact? { contactIndex.byID[id] }
     func tasks(for goalID: UUID) -> [PlannerTask] { data.tasks.filter { $0.goalID == goalID && !$0.cancelled } }
     func progress(for goalID: UUID) -> String {
         let rows = tasks(for: goalID)
@@ -158,6 +171,17 @@ final class PlannerStore: ObservableObject {
         guard !value.title.isEmpty else { return false }
         if value.status == .achieved { value.achievedAt = value.achievedAt ?? Date() }
         else { value.achievedAt = nil }
+        let distinct = Domain.allCases.filter { value.domains.contains($0) && $0 != value.domain }
+        value.extraDomains = distinct.isEmpty ? nil : distinct
+        var order: [String: Int] = [:]
+        for domain in value.domains {
+            if let rank = value.domainOrder?[domain.rawValue] { order[domain.rawValue] = rank }
+            else if !data.goals.contains(where: { $0.id == value.id && $0.domains.contains(domain) }) {
+                let peers = data.goals.enumerated().filter { $0.element.domains.contains(domain) }
+                order[domain.rawValue] = (peers.map { $0.element.domainOrder?[domain.rawValue] ?? $0.offset }.max() ?? -1) + 1
+            }
+        }
+        value.domainOrder = order.isEmpty ? nil : order
         let success = commit { document in
             if let index = document.goals.firstIndex(where: { $0.id == value.id }) { document.goals[index] = value }
             else { document.goals.append(value) }
@@ -174,13 +198,24 @@ final class PlannerStore: ObservableObject {
         value.steps.removeAll { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         if value.cancelled { value.completedAt = nil; value.focusDate = nil }
         if let goal = goal(value.goalID) { value.domain = goal.domain }
-        if let old = task(value.id) {
+        let old = task(value.id)
+        if let old {
+            value.planOrder = old.planOrder
             value.planningHistory = old.planningHistory
             if old.schedule != value.schedule {
                 value.planningHistory.append(PlanningChange(previous: old.schedule, next: value.schedule))
             }
         }
         let success = commit { document in
+            if old == nil || old?.schedule != value.schedule {
+                value.planOrder = Self.appendOrder(in: document, schedule: value.schedule)
+            }
+            if let date = old?.completedAt, value.completedAt == nil {
+                for i in document.completions.indices where document.completions[i].taskID == value.id
+                    && abs(document.completions[i].date.timeIntervalSince(date)) < 1 {
+                    document.completions[i].withdrawn = true
+                }
+            }
             if let index = document.tasks.firstIndex(where: { $0.id == value.id }) { document.tasks[index] = value }
             else { document.tasks.append(value) }
         }
@@ -215,18 +250,21 @@ final class PlannerStore: ObservableObject {
     }
     @discardableResult
     func schedule(_ ids: [UUID], to value: Schedule?) -> Bool {
-        let targets = data.tasks.filter { ids.contains($0.id) && $0.isOpen }
+        let requested = Set(ids)
+        let targets = data.tasks.filter { requested.contains($0.id) && $0.isOpen }
         let changed = targets.filter { $0.schedule != value }
         guard !changed.isEmpty else { return true }
-        let previous = changed.map { (id: $0.id, schedule: $0.schedule) }
+        let previous = changed.map { (id: $0.id, schedule: $0.schedule, order: $0.planOrder) }
         let changedIDs = Set(changed.map(\.id))
         let success = commit { document in
             for i in document.tasks.indices where changedIDs.contains(document.tasks[i].id) {
                 document.tasks[i].planningHistory.append(PlanningChange(previous: document.tasks[i].schedule, next: value))
+                document.tasks[i].planOrder = Self.appendOrder(in: document, schedule: value)
                 document.tasks[i].schedule = value
             }
         }
         if success {
+            clearChangeUndo()
             scheduleUndo = previous; canUndoSchedule = true
             notice = value.map { "已安排 \(changed.count) 項至 \($0.label)" } ?? "已將 \(changed.count) 項放回待安排"
         }
@@ -239,6 +277,7 @@ final class PlannerStore: ObservableObject {
                 guard let i = document.tasks.firstIndex(where: { $0.id == saved.id }) else { continue }
                 document.tasks[i].planningHistory.append(PlanningChange(previous: document.tasks[i].schedule, next: saved.schedule))
                 document.tasks[i].schedule = saved.schedule
+                document.tasks[i].planOrder = saved.order
             }
         }
         if success { clearUndo(); notice = "已復原日期安排" }
@@ -255,6 +294,192 @@ final class PlannerStore: ObservableObject {
         }
         _ = saveTask(task)
     }
+    func goals(in domain: Domain, active: Bool) -> [Goal] {
+        data.goals.enumerated().filter { $0.element.domains.contains(domain) && ($0.element.status == .active) == active }
+            .sorted { a, b in
+                let x = a.element.domainOrder?[domain.rawValue] ?? a.offset
+                let y = b.element.domainOrder?[domain.rawValue] ?? b.offset
+                return x == y ? a.offset < b.offset : x < y
+            }.map(\.element)
+    }
+
+    func moveGoals(_ rows: [Goal], in domain: Domain, from offsets: IndexSet, to destination: Int) {
+        guard let first = rows.first else { return }
+        var ids = rows.map(\.id)
+        ids.move(fromOffsets: offsets, toOffset: destination)
+        let active = first.status == .active
+        let others = goals(in: domain, active: !active).map(\.id)
+        let ordered = active ? ids + others : others + ids
+        let positions = Dictionary(uniqueKeysWithValues: ordered.enumerated().map { ($0.element, $0.offset) })
+        commit { document in
+            for i in document.goals.indices {
+                if let order = positions[document.goals[i].id] {
+                    var map = document.goals[i].domainOrder ?? [:]
+                    map[domain.rawValue] = order
+                    document.goals[i].domainOrder = map
+                }
+            }
+        }
+    }
+
+    func deleteGoal(_ id: UUID) {
+        if commit({ document in
+            document.goals.removeAll { $0.id == id }
+            document.reviews.removeAll { $0.goalID == id }
+            for i in document.tasks.indices where document.tasks[i].goalID == id { document.tasks[i].goalID = nil }
+        }), pendingGoalID == id { pendingGoalID = nil }
+    }
+
+    func deleteTask(_ id: UUID) {
+        let goalID = task(id)?.goalID
+        if commit({ $0.tasks.removeAll { $0.id == id } }), pendingGoalID == goalID { pendingGoalID = nil }
+    }
+
+    private static func appendOrder(in document: PlannerDocument, schedule: Schedule?) -> Int {
+        (document.tasks.lazy.filter { $0.schedule == schedule }.compactMap(\.planOrder).max() ?? 0) + 1
+    }
+
+    func movePlanTasks(_ rows: [PlannerTask], from offsets: IndexSet, to destination: Int) {
+        guard let first = rows.first else { return }
+        let visible = Set(rows.map(\.id))
+        var moved = rows
+        moved.move(fromOffsets: offsets, toOffset: destination)
+        let siblings = data.tasks.filter { $0.isOpen && $0.schedule == first.schedule }.sorted(by: Self.planBefore)
+        var replacements = moved.makeIterator()
+        let ids = siblings.map { visible.contains($0.id) ? (replacements.next()?.id ?? $0.id) : $0.id }
+        let positions = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset - ids.count) })
+        commit { document in
+            for i in document.tasks.indices {
+                if let order = positions[document.tasks[i].id] { document.tasks[i].planOrder = order }
+            }
+        }
+    }
+
+    static func planBefore(_ a: PlannerTask, _ b: PlannerTask) -> Bool {
+        let x = a.planOrder ?? 0, y = b.planOrder ?? 0
+        if x != y { return x < y }
+        if (a.focusDate != nil) != (b.focusDate != nil) { return a.focusDate != nil }
+        if a.isOverdue() != b.isOverdue() { return a.isOverdue() }
+        if a.createdAt != b.createdAt { return a.createdAt < b.createdAt }
+        return a.id.uuidString < b.id.uuidString
+    }
+
+    func journalEntry(on date: Date, adding record: CompletionRecord? = nil) -> JournalEntry {
+        var entry = data.journal.filter { PlannerDates.calendar.isDate($0.date, inSameDayAs: date) }
+            .max { $0.date < $1.date } ?? JournalEntry(date: date)
+        if let record {
+            entry.text = [entry.text, record.title, record.journalText]
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: "\n\n")
+        }
+        return entry
+    }
+
+    func finishJournalAddition(_ id: UUID) {
+        commit { document in
+            if let index = document.completions.firstIndex(where: { $0.id == id }) {
+                document.completions[index].addedToJournal = true
+            }
+        }
+    }
+
+    func canReopen(_ record: CompletionRecord) -> Bool {
+        guard record.isVisible, let date = task(record.taskID)?.completedAt else { return false }
+        return abs(date.timeIntervalSince(record.date)) < 1
+    }
+
+    func withdrawCompletion(_ record: CompletionRecord) {
+        guard canReopen(record), let original = task(record.taskID) else { return }
+        var reopened = original
+        reopened.completedAt = nil
+        guard saveTask(reopened) else { return }
+        offerUndo("已取消完成") { [weak self] in
+            guard let self, var current = self.task(original.id), current.isOpen else { return }
+            current.completedAt = original.completedAt
+            self.commit { document in
+                if let i = document.tasks.firstIndex(where: { $0.id == original.id }) { document.tasks[i] = current }
+                if let i = document.completions.firstIndex(where: { $0.id == record.id }) { document.completions[i].withdrawn = nil }
+            }
+        }
+    }
+
+    private func offerUndo(_ message: String, action: @escaping () -> Void) {
+        clearUndo()
+        notice = message
+        changeUndo = action
+        canUndoChange = true
+        let token = UUID()
+        undoToken = token
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(7))
+            if let self, self.undoToken == token { self.clearChangeUndo() }
+        }
+    }
+
+    func undoChange() {
+        let action = changeUndo
+        clearChangeUndo()
+        notice = nil
+        action?()
+    }
+
+    func clearChangeUndo() {
+        changeUndo = nil; canUndoChange = false; undoToken = UUID()
+    }
+
+    func saveCategory(name: String, color: String) -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var catalog = tags
+        guard !name.isEmpty, !catalog.categories.contains(where: { $0.name.compare(name, options: .caseInsensitive) == .orderedSame }) else { return false }
+        catalog.categories.append(ContactTagCategory(id: UUID().uuidString, name: name, color: color))
+        return commit { $0.tagCatalog = catalog }
+    }
+
+    func saveTag(name: String, category: String, existing: UUID? = nil) -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var catalog = tags
+        guard !name.isEmpty, !catalog.tags.contains(where: {
+            $0.categoryID == category && $0.id != existing && $0.name.compare(name, options: .caseInsensitive) == .orderedSame
+        }) else { return false }
+        if let i = catalog.tags.firstIndex(where: { $0.id == existing }) { catalog.tags[i].name = name }
+        else { catalog.tags.append(ContactTag(categoryID: category, name: name)) }
+        return commit { $0.tagCatalog = catalog }
+    }
+
+    func setCategoryColor(_ color: String, category: String) {
+        var catalog = tags
+        guard let i = catalog.categories.firstIndex(where: { $0.id == category }) else { return }
+        catalog.categories[i].color = color
+        commit { $0.tagCatalog = catalog }
+    }
+
+    func changeTags(_ tags: Set<UUID>, for people: Set<UUID>, adding: Bool) {
+        var changed: [UUID: Set<UUID>] = [:]
+        for id in people {
+            guard let contact = contact(id) else { continue }
+            let current = Set(contact.tagIDs ?? [])
+            let delta = adding ? tags.subtracting(current) : tags.intersection(current)
+            if !delta.isEmpty { changed[id] = delta }
+        }
+        guard !changed.isEmpty, applyTags(changed, adding: adding) else { return }
+        if adding {
+            recentTags = Array((tags.sorted { $0.uuidString < $1.uuidString } + recentTags.filter { !tags.contains($0) }).prefix(5))
+        }
+        offerUndo("已更新 \(changed.count) 位聯絡人的標籤") { [weak self] in
+            _ = self?.applyTags(changed, adding: !adding)
+        }
+    }
+
+    private func applyTags(_ changed: [UUID: Set<UUID>], adding: Bool) -> Bool {
+        commit { document in
+            for i in document.contacts.indices {
+                guard let delta = changed[document.contacts[i].id] else { continue }
+                let current = Set(document.contacts[i].tagIDs ?? [])
+                let next = adding ? current.union(delta) : current.subtracting(delta)
+                document.contacts[i].tagIDs = next.isEmpty ? nil : next.sorted { $0.uuidString < $1.uuidString }
+            }
+        }
+    }
+
     @discardableResult
     func saveJournal(_ entry: JournalEntry) -> Bool {
         guard !entry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
@@ -268,7 +493,10 @@ final class PlannerStore: ObservableObject {
         var contact = contact; contact.name = contact.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !contact.name.isEmpty else { return false }
         return commit { document in
-            if let i = document.contacts.firstIndex(where: { $0.id == contact.id }) { document.contacts[i] = contact }
+            if let i = document.contacts.firstIndex(where: { $0.id == contact.id }) {
+                contact.tagIDs = document.contacts[i].tagIDs
+                document.contacts[i] = contact
+            }
             else { document.contacts.append(contact) }
         }
     }
@@ -290,6 +518,26 @@ final class PlannerStore: ObservableObject {
             }
         }
     }
+    func exportArchive() async throws -> Data {
+        guard !recoveryRequired, !loading else { throw PlannerError.invalidBackup("請先開啟 Planner 資料。") }
+        let snapshot = data
+        return try await Task.detached(priority: .userInitiated) { try BackupArchive.make(snapshot) }.value
+    }
+
+    func restoreArchive(_ backup: PreparedBackup) async -> Bool {
+        guard !loading else { return false }
+        loading = true
+        defer { loading = false }
+        do {
+            let current = recoveryRequired ? nil : data
+            try adopt(await files.restore(backup.document, preserving: current))
+            return true
+        } catch {
+            self.error = "無法還原：\(error.localizedDescription)"
+            return false
+        }
+    }
+
     func exportData() throws -> Data {
         guard !recoveryRequired else { throw PlannerError.invalidBackup("請先還原資料，避免匯出空白內容。") }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

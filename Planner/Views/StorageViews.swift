@@ -45,6 +45,7 @@ struct StartupView: View {
                     Button("選擇其他位置") { action = .create }
                 } label: { Label("重新開始", systemImage: "plus").frame(maxWidth: .infinity).padding(.vertical, 8) }.buttonStyle(.bordered).accessibilityIdentifier("startNewMenu")
                 Text("預設位置：我的 iPhone／Planner\n原有資料會保留；建立新資料不需要備份。").font(.caption).foregroundStyle(.secondary)
+                BackupControls()
                 Button("重試讀取") { Task { await store.openLastFolder() } }.font(.subheadline)
                 Spacer(minLength: 0)
             }.padding(24).padding(.top, 24)
@@ -63,9 +64,11 @@ struct StartupView: View {
 
 struct CompletionRow: View {
     let record: CompletionRecord
+    var showSymbol = true
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Label(record.title, systemImage: "checkmark.circle.fill").foregroundStyle(Color.plannerAccent)
+            if showSymbol { Label(record.title, systemImage: "checkmark.circle.fill").foregroundStyle(Color.plannerAccent) }
+            else { Text(record.title).foregroundStyle(.primary) }
             if let goal = record.goalTitle { Text(goal).font(.caption).foregroundStyle(.secondary) }
             if !record.text.isEmpty { Text(record.text).font(.subheadline).foregroundStyle(.secondary) }
             Text(PlannerDates.text(record.date, "yyyy/M/d HH:mm")).font(.caption2).foregroundStyle(.secondary)
@@ -97,7 +100,7 @@ struct VaultBrowserView: View {
                         files = try await Task.detached(priority: .userInitiated) {
                             let scope = root.startAccessingSecurityScopedResource()
                             defer { if scope { root.stopAccessingSecurityScopedResource() } }
-                            return try ["日記", "人脈"].flatMap { folder -> [URL] in
+                            return try ["Journal", "Contacts", "日記", "人脈"].flatMap { folder -> [URL] in
                                 let url = root.appendingPathComponent(folder)
                                 guard FileManager.default.fileExists(atPath: url.path) else { return [] }
                                 return try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil).filter { $0.pathExtension == "md" }

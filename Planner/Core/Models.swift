@@ -38,7 +38,7 @@ enum GoalStatus: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum TimeScale: String, Codable, CaseIterable, Identifiable {
+enum TimeScale: String, Codable, CaseIterable, Identifiable, Hashable {
     case day, week, month, year
     var id: String { rawValue }
     var title: String {
@@ -102,7 +102,7 @@ enum PlannerDates {
     }
 }
 
-struct Schedule: Codable, Equatable {
+struct Schedule: Codable, Hashable {
     var date: Date
     var scale: TimeScale
     init(_ date: Date, scale: TimeScale = .day, calendar: Calendar = PlannerDates.calendar) {
@@ -133,6 +133,10 @@ struct Goal: Codable, Identifiable, Equatable {
     var id = UUID()
     var title = ""
     var domain: Domain = .intellectual
+    var extraDomains: [Domain]?
+    var domainOrder: [String: Int]?
+    var domains: [Domain] { [domain] + (extraDomains ?? []).filter { $0 != domain } }
+    var domainTitle: String { domains.map(\.title).joined(separator: "、") }
     var criteria = ""
     var targetDate: Date?
     var status: GoalStatus = .active
@@ -167,6 +171,7 @@ struct PlannerTask: Codable, Identifiable, Equatable {
     var cancelled = false
     var focusDate: Date?
     var planningHistory: [PlanningChange] = []
+    var planOrder: Int?
     var isDone: Bool { completedAt != nil }
     var isOpen: Bool { !isDone && !cancelled }
     var stepProgress: String { "\(steps.filter(\.done).count)/\(steps.count)" }
@@ -192,6 +197,7 @@ struct Contact: Codable, Identifiable, Equatable {
     var details = ""
     var keepHistory = false
     var archived = false
+    var tagIDs: [UUID]?
 }
 
 struct Interaction: Codable, Identifiable, Equatable {
@@ -218,10 +224,23 @@ struct CompletionRecord: Codable, Identifiable, Equatable {
     var domain: Domain?
     var goalTitle: String?
     var contactIDs: [UUID]
+    var withdrawn: Bool?
+    var addedToJournal: Bool?
+    var journalExcerpt: String?
+
+    var isVisible: Bool { withdrawn != true }
+    var appearsInJournal: Bool { isVisible && addedToJournal != true }
+    var journalText: String {
+        journalExcerpt ?? text.components(separatedBy: "\n").compactMap { line in
+            if line.hasPrefix("- [ ] ") { return nil }
+            if line.hasPrefix("- [x] ") { return "- " + line.dropFirst(6) }
+            return line
+        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 struct PlannerDocument: Codable, Equatable {
-    static let currentVersion = 3
+    static let currentVersion = 4
     var version = currentVersion
     var goals: [Goal] = []
     var tasks: [PlannerTask] = []
@@ -230,13 +249,14 @@ struct PlannerDocument: Codable, Equatable {
     var interactions: [Interaction] = []
     var reviews: [GoalReview] = []
     var completions: [CompletionRecord] = []
+    var tagCatalog: ContactTagCatalog?
 
     init() {}
-    enum CodingKeys: String, CodingKey { case version, goals, tasks, journal, contacts, interactions, reviews, completions }
+    enum CodingKeys: String, CodingKey { case version, goals, tasks, journal, contacts, interactions, reviews, completions, tagCatalog }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 2
-        guard version == 2 || version == Self.currentVersion else { throw PlannerError.invalidBackup("不支援此備份版本。") }
+        guard (2...Self.currentVersion).contains(version) else { throw PlannerError.invalidBackup("不支援此備份版本。") }
         guard !c.allKeys.isEmpty else { throw PlannerError.invalidBackup("沒有可辨識的 Planner 資料。") }
         self.version = Self.currentVersion
         goals = try c.decodeIfPresent([Goal].self, forKey: .goals) ?? []
@@ -246,17 +266,21 @@ struct PlannerDocument: Codable, Equatable {
         interactions = try c.decodeIfPresent([Interaction].self, forKey: .interactions) ?? []
         reviews = try c.decodeIfPresent([GoalReview].self, forKey: .reviews) ?? []
         completions = try c.decodeIfPresent([CompletionRecord].self, forKey: .completions) ?? []
+        tagCatalog = try c.decodeIfPresent(ContactTagCatalog.self, forKey: .tagCatalog)
     }
 
     mutating func captureCompletions() {
-        // A historical record never depends on the continued existence of its task.
-        let recorded = Set(completions.map(\.taskID))
+        let recorded = Dictionary(grouping: completions.filter(\.isVisible), by: \.taskID)
         let titles = Dictionary(goals.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
-        for task in tasks where task.isDone && !task.cancelled && !recorded.contains(task.id) {
+        for task in tasks where !task.cancelled {
+            guard let date = task.completedAt,
+                  recorded[task.id]?.contains(where: { abs($0.date.timeIntervalSince(date)) < 1 }) != true else { continue }
             let steps = task.steps.map { "- [\($0.done ? "x" : " ")] \($0.title)" }.joined(separator: "\n")
-            completions.append(CompletionRecord(taskID: task.id, date: task.completedAt!, title: task.title,
+            let done = task.steps.filter(\.done).map { "- \($0.title)" }.joined(separator: "\n")
+            completions.append(CompletionRecord(taskID: task.id, date: date, title: task.title,
                 text: [task.notes, steps].filter { !$0.isEmpty }.joined(separator: "\n\n"), domain: task.domain,
-                goalTitle: task.goalID.flatMap { titles[$0] }, contactIDs: task.contactIDs))
+                goalTitle: task.goalID.flatMap { titles[$0] }, contactIDs: task.contactIDs,
+                journalExcerpt: [task.notes, done].filter { !$0.isEmpty }.joined(separator: "\n\n")))
         }
     }
 
@@ -266,7 +290,7 @@ struct PlannerDocument: Codable, Equatable {
             Set(values.map(\.id)).count == values.count
         }
         guard unique(goals), unique(tasks), unique(journal), unique(contacts), unique(interactions), unique(reviews), unique(completions),
-              tasks.allSatisfy({ unique($0.steps) }) else { throw PlannerError.invalidBackup("備份含有重複項目。") }
+              tasks.allSatisfy({ unique($0.steps) }), tagCatalog?.isValid != false else { throw PlannerError.invalidBackup("備份含有重複項目。") }
         let goalIDs = Set(goals.map(\.id)), contactIDs = Set(contacts.map(\.id))
         guard tasks.allSatisfy({ task in
             (task.goalID == nil || goalIDs.contains(task.goalID!)) && Set(task.contactIDs).isSubset(of: contactIDs)

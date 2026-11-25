@@ -47,6 +47,7 @@ final class FolderSession {
             defer { if scoped { directory.stopAccessingSecurityScopedResource() } }
             let candidate = MarkdownVault(directory: directory)
             if let document = try candidate.load() {
+                if candidate.repair { try candidate.save(document) }
                 if FileManager.default.fileExists(atPath: directory.appendingPathComponent(".planner/backup.marker").path) {
                     return try self.install(document, in: MarkdownVault.defaultDirectory, notice: "已還原備份，原備份保留。")
                 }
@@ -116,6 +117,19 @@ final class FolderSession {
             return try self.install(document, in: directory, notice: "已建立資料，原有檔案保留。")
         }
     }
+    func restore(_ imported: PlannerDocument, preserving current: PlannerDocument?) async throws -> OpenedFolder {
+        try await perform {
+            try self.flushNow()
+            if let current {
+                let folder = MarkdownVault.defaultDirectory.appendingPathComponent("Planner Backups", isDirectory: true)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let name = "Planner-before-restore-\(PlannerDates.text(Date(), "yyyyMMdd-HHmmss"))-\(UUID().uuidString.prefix(6)).zip"
+                try BackupArchive.make(current).write(to: folder.appendingPathComponent(name), options: .atomic)
+            }
+            return try self.install(imported, in: MarkdownVault.defaultDirectory, notice: "已還原備份，原資料保留。")
+        }
+    }
+
     func reload() async throws -> OpenedFolder {
         try await perform {
             guard let vault = self.vault else { throw PlannerError.invalidBackup("尚未選擇資料夾。") }

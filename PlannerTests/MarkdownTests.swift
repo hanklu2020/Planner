@@ -29,7 +29,7 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(restored.tasks, doc.tasks)
         let state = try String(contentsOf: root.appendingPathComponent(".planner/state.json"), encoding: .utf8)
         XCTAssertFalse(state.contains("第一段")); XCTAssertFalse(state.contains("電話"))
-        let file = root.appendingPathComponent("日記/2026-11.md")
+        let file = root.appendingPathComponent("Journal/2026-11.md")
         let text = try String(contentsOf: file, encoding: .utf8)
         XCTAssertTrue(text.contains("第一段")); XCTAssertTrue(text.contains("訂餐廳"))
     }
@@ -61,7 +61,7 @@ final class MarkdownTests: XCTestCase {
     func testExternalChangesAreNotOverwritten() throws {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
         var doc = fixture(); let vault = MarkdownVault(directory: root); try vault.save(doc)
-        let file = root.appendingPathComponent("日記/2026-11.md")
+        let file = root.appendingPathComponent("Journal/2026-11.md")
         let external = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "第一段", with: "外部修改")
         try Data(external.utf8).write(to: file)
         doc.journal[0].text = "App 修改"
@@ -73,7 +73,7 @@ final class MarkdownTests: XCTestCase {
     func testPartlyDamagedMarkdownPreservesGoodFilesAndArchivesBadBytes() throws {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
         var doc = fixture(); try MarkdownVault(directory: root).save(doc)
-        let bad = root.appendingPathComponent("日記/2026-10.md"), raw = Data("<!-- Planner Markdown 1 -->\n# 壞掉\n\n<!-- planner:invalid -->\n".utf8)
+        let bad = root.appendingPathComponent("Journal/2026-10.md"), raw = Data("<!-- Planner Markdown 1 -->\n# 壞掉\n\n<!-- planner:invalid -->\n".utf8)
         try raw.write(to: bad)
         let vault = MarkdownVault(directory: root)
         doc = try XCTUnwrap(vault.load())
@@ -86,7 +86,7 @@ final class MarkdownTests: XCTestCase {
     func testPlanningOnlySaveDoesNotRewriteMarkdown() throws {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
         var doc = fixture(); let vault = MarkdownVault(directory: root); try vault.save(doc)
-        let file = root.appendingPathComponent("日記/2026-11.md")
+        let file = root.appendingPathComponent("Journal/2026-11.md")
         let old = Date(timeIntervalSince1970: 1000)
         try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: file.path)
         let before = try Data(contentsOf: file)
@@ -121,7 +121,7 @@ final class MarkdownTests: XCTestCase {
     func testVersionTwoMissingOptionalCollectionsStillLoads() throws {
         let data = Data("{\"version\":2,\"tasks\":[],\"journal\":[]}".utf8)
         let document = try PlannerDisk.decode(data)
-        XCTAssertEqual(document.version, 3); XCTAssertTrue(document.contacts.isEmpty)
+        XCTAssertEqual(document.version, PlannerDocument.currentVersion); XCTAssertTrue(document.contacts.isEmpty)
     }
     func testLargeJournalAndDuplicateNamesRemainSeparate() throws {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }

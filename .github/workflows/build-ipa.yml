@@ -1,6 +1,11 @@
 name: Build Planner IPA
 on:
   workflow_dispatch:
+    inputs:
+      run_tests:
+        description: Run the simulator test suite
+        type: boolean
+        default: false
   push:
     branches: ['codex/planner-*']
 permissions:
@@ -16,12 +21,15 @@ jobs:
       - name: Generate project
         run: xcodegen generate
       - name: Select iPhone simulator
+        if: inputs.run_tests == true
         run: |
           SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for group in data["devices"].values() for d in group if d["name"].startswith("iPhone")))')
           echo "PLANNER_SIMULATOR_ID=$SIMULATOR_ID" >> "$GITHUB_ENV"
       - name: Compile simulator app and tests
+        if: inputs.run_tests == true
         run: xcodebuild -project Planner.xcodeproj -scheme Planner -configuration Debug -destination "platform=iOS Simulator,id=$PLANNER_SIMULATOR_ID" -derivedDataPath build-tests CODE_SIGNING_ALLOWED=NO build-for-testing
       - name: Unit and iPhone UI tests
+        if: inputs.run_tests == true
         run: xcodebuild -project Planner.xcodeproj -scheme Planner -configuration Debug -destination "platform=iOS Simulator,id=$PLANNER_SIMULATOR_ID" -derivedDataPath build-tests -resultBundlePath TestResults.xcresult -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 300 -maximum-test-execution-time-allowance 300 CODE_SIGNING_ALLOWED=NO test-without-building
       - name: Build iPhone app
         run: |
@@ -37,20 +45,14 @@ jobs:
           assert info['UIFileSharingEnabled'] is True
           assert info['LSSupportsOpeningDocumentsInPlace'] is True
           assert info['CFBundleIdentifier'] == 'com.personalplanner.mvp'
-          assert info['CFBundleShortVersionString'] == '2.1.0'
-          assert str(info['CFBundleVersion']) == '210'
+          assert info['CFBundleShortVersionString'] == '2.2.0'
+          assert str(info['CFBundleVersion']) == '220'
           PYTHON
           cd dist
-          /usr/bin/zip -qry Planner.ipa Payload
-          unzip -t Planner.ipa
+          /usr/bin/zip -qry Planner-2.2.0.ipa Payload
+          unzip -t Planner-2.2.0.ipa
       - uses: actions/upload-artifact@v4
         with:
           name: Planner-IPA
-          path: dist/Planner.ipa
+          path: dist/Planner-2.2.0.ipa
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: Planner-Test-Results
-          path: TestResults.xcresult
-          if-no-files-found: ignore

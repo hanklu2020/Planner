@@ -20,7 +20,7 @@ struct GoalsView: View {
                                     Image(systemName: domain.symbol).font(.title2).foregroundStyle(domain.color)
                                     VStack(alignment: .leading, spacing: 5) {
                                         Text(domain.title).font(.title3.weight(.semibold)).foregroundStyle(.primary)
-                                        Text("\(store.data.goals.filter { $0.domain == domain && $0.status == .active }.count) 個進行中")
+                                        Text("\(store.data.goals.filter { $0.domains.contains(domain) && $0.status == .active }.count) 個進行中")
                                             .font(.caption).foregroundStyle(.secondary)
                                     }
                                 }
@@ -62,21 +62,38 @@ struct DomainGoalsView: View {
     let domain: Domain
     @State private var newGoal = false
     @State private var showPast = false
-    private var active: [Goal] { store.data.goals.filter { $0.domain == domain && $0.status == .active } }
-    private var past: [Goal] { store.data.goals.filter { $0.domain == domain && $0.status != .active } }
+    @State private var order: EditMode = .inactive
+    @State private var deleting: Goal?
+    private var active: [Goal] { store.goals(in: domain, active: true) }
+    private var past: [Goal] { store.goals(in: domain, active: false) }
     var body: some View {
         List {
             if active.isEmpty { EmptyMessage(title: "從一個目標開始", symbol: domain.symbol, detail: "想在\(domain.title)方面達成什麼？點右上角新增。") }
             ForEach(active) { goal in goalRow(goal) }
+                .onMove { store.moveGoals(active, in: domain, from: $0, to: $1) }
             if !past.isEmpty {
                 DisclosureGroup("已暫停與已結束（\(past.count)）", isExpanded: $showPast) {
                     ForEach(past) { goal in goalRow(goal) }
+                        .onMove { store.moveGoals(past, in: domain, from: $0, to: $1) }
                 }
             }
         }.listStyle(.insetGrouped)
         .navigationTitle(domain.title).navigationBarTitleDisplayMode(.inline)
-        .toolbar { Button { newGoal = true } label: { Image(systemName: "plus") }.accessibilityLabel("新增目標") }
+        .environment(\.editMode, $order)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button(order.isEditing ? "完成" : "排序") { withAnimation { order = order.isEditing ? .inactive : .active } }
+                    .disabled(active.count < 2 && past.count < 2 && !order.isEditing)
+                Button { newGoal = true } label: { Image(systemName: "plus") }.accessibilityLabel("新增目標")
+            }
+        }
         .sheet(isPresented: $newGoal) { GoalEditor(initial: Goal(domain: domain)) }
+        .alert("刪除目標？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { goal in
+            Button("刪除目標", role: .destructive) { store.deleteGoal(goal.id) }
+            Button("取消", role: .cancel) { }
+        } message: { goal in
+            Text("影響領域：\(goal.domainTitle)。\(store.data.tasks.filter { $0.goalID == goal.id }.count) 項任務會留在計畫。")
+        }
     }
     private func goalRow(_ goal: Goal) -> some View {
         NavigationLink { GoalDetailView(goalID: goal.id) } label: {
@@ -88,6 +105,7 @@ struct DomainGoalsView: View {
                 } else if goal.status == .active { Text("尚無下一步，或等待確認達成").font(.caption).foregroundStyle(.secondary) }
             }.padding(.vertical, 5)
         }
+        .swipeActions(allowsFullSwipe: false) { Button("刪除", role: .destructive) { deleting = goal } }
     }
 }
 
@@ -107,7 +125,19 @@ struct GoalEditor: View {
             Form {
                 Section {
                     TextField("想達成什麼？", text: $value.title).accessibilityIdentifier("goalTitle")
-                    Picker("領域", selection: $value.domain) { ForEach(Domain.allCases) { Text($0.title).tag($0) } }
+                }
+                Section("領域") {
+                    ForEach(Domain.allCases) { domain in
+                        Toggle(domain.title, isOn: Binding(get: { value.domains.contains(domain) }, set: { enabled in
+                            var domains = value.domains
+                            if enabled { if !domains.contains(domain) { domains.append(domain) } }
+                            else { domains.removeAll { $0 == domain } }
+                            guard let first = domains.first else { return }
+                            value.domain = first
+                            value.extraDomains = Array(domains.dropFirst())
+                        }))
+                        .disabled(value.domains == [domain])
+                    }
                 }
                 Section {
                     TextField("怎樣才算達成？（可稍後補上）", text: $value.criteria, axis: .vertical).lineLimit(2...5).accessibilityIdentifier("goalCriteria")
@@ -148,7 +178,7 @@ struct GoalDetailView: View {
             List {
                 Section {
                     Text(goal.title).font(.title2.weight(.semibold))
-                    Label(goal.domain.title, systemImage: goal.domain.symbol).font(.caption).foregroundStyle(goal.domain.color)
+                    Label(goal.domainTitle, systemImage: goal.domain.symbol).font(.caption).foregroundStyle(goal.domain.color)
                     LabeledContent("狀態", value: goal.status.title)
                     if let date = goal.targetDate { LabeledContent("預計達成日", value: PlannerDates.text(date, "yyyy/M/d")) }
                 }
@@ -250,7 +280,7 @@ struct ReviewView: View {
                             Button("結束目標") { decide(goal, "結束目標", status: .ended) }
                         }
                         Button("修正目標與達成條件") { editingGoal = GoalPresentation(goal: goal) }
-                    } header: { Text(goal.domain.title) }
+                    } header: { Text(goal.domainTitle) }
                 }
             }
             .plannerErrors()
