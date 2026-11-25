@@ -19,6 +19,7 @@ struct SchedulePicker: View {
                         Spacer()
                         shortcut("下週", date: PlannerDates.shifted(Date(), .week, by: 1), scale: .week)
                     }.padding(.vertical, 6)
+                    Button("放回待安排") { apply(nil) }.accessibilityIdentifier("clearSchedule")
                 }
                 Section("選擇時間") {
                     Picker("安排到", selection: $scale) { ForEach(TimeScale.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented)
@@ -26,11 +27,15 @@ struct SchedulePicker: View {
                     if scale != .day { Text("將放入這\(scale.title)的待排日期，不會自動指定某一天。").font(.caption).foregroundStyle(.secondary) }
                 }
                 if scale == .day { DayLoadView(date: date, excluding: Set(taskIDs)) }
-                Section {
-                    Button("安排至 \(Schedule(date, scale: scale).label)") { apply(Schedule(date, scale: scale)) }
-                        .fontWeight(.semibold).accessibilityIdentifier("applySchedule")
-                    Button("放回待安排") { apply(nil) }
-                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button("安排至 \(Schedule(date, scale: scale).label)") { apply(Schedule(date, scale: scale)) }
+                    .fontWeight(.semibold).frame(maxWidth: .infinity).padding(.vertical, 5)
+                    .buttonStyle(.borderedProminent).accessibilityIdentifier("applySchedule")
+                    .padding(14).background(.regularMaterial)
+            }
+            .onAppear {
+                if taskIDs.count == 1, let schedule = store.task(taskIDs[0])?.schedule { date = schedule.date; scale = schedule.scale }
             }
             .plannerErrors()
             .navigationTitle("安排日期 · \(taskIDs.count) 項").navigationBarTitleDisplayMode(.inline)
