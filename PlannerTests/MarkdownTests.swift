@@ -89,8 +89,13 @@ final class MarkdownTests: XCTestCase {
         let file = root.appendingPathComponent("日記/2026-11.md")
         let old = Date(timeIntervalSince1970: 1000)
         try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: file.path)
+        let before = try Data(contentsOf: file)
+        // URL resource values can retain a cached timestamp after setAttributes.
+        func modified() throws -> Date? { try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date }
+        XCTAssertEqual(try modified(), old)
         doc.tasks[0].schedule = Schedule(Date()); try vault.save(doc)
-        XCTAssertEqual(try file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, old)
+        XCTAssertEqual(try modified(), old)
+        XCTAssertEqual(try Data(contentsOf: file), before)
     }
     func testPendingWriteRecoveryAndEmptyFolderDetection() throws {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }

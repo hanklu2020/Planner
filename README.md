@@ -11,12 +11,12 @@ Native SwiftUI iPhone app, iOS 17+, with four fixed tabs: **目標｜計畫｜�
 - Inline date shortcuts, bulk scheduling, sequential scheduling with skip/undo and visible daily load, schedule history. Week/month/year assignments remain unspecific, and never become arbitrary day assignments. Rescheduling does not change deadlines.
 - Journal writing/editing/deleting, optional content-language marker, completed-task history, oldest-to-newest timeline, two-day recent buffer, loading older records in batches. Interface language is Traditional Chinese.
 - Contact details, manual interactions, pending related tasks, completed interactions, archiving, protected long-term history, explicit cleanup of old manual interactions.
-- Atomic versioned JSON storage, previous-save recovery, JSON export/import, strict backup validation, automatic migration from the MVP's `tasks`, `journal`, and `contacts` UserDefaults keys. Legacy keys are retained.
+- Readable Markdown for journals and contacts, compact versioned JSON for planning data, previous-save recovery, complete folder/JSON backups, and automatic migration from the MVP and 2.0. Legacy originals are retained.
 
 ## Behavior decisions
 
 1. Missed plans stay under 待處理; they do not automatically roll into tomorrow. Only missed hard deadlines are overdue.
-2. Completion history refers to the original task. Today/yesterday are 最近完成; older records are 完成紀錄. There is no destructive move or duplicate task.
+2. Completion history is a separate snapshot of the task at completion. Today/yesterday are 最近完成; older records are 完成紀錄. Deleting or changing a task does not remove that history.
 3. Years/months/weeks are time views, not extra goal levels.
 4. Steps are not separately scheduled. Split an independently schedulable action into another task.
 5. Goal task counts exclude cancelled tasks, and are not outcome percentages.
