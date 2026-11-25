@@ -31,7 +31,7 @@ struct ContentView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if tab != 3 || store.recoveryRequired { PlannerNotice().padding(.bottom, 58) }
+            if (tab != 1 && tab != 3) || store.recoveryRequired { PlannerNotice().padding(.bottom, 58) }
         }
         .plannerErrors()
         .sheet(isPresented: $showingSettings) { SettingsView() }

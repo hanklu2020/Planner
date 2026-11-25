@@ -15,6 +15,7 @@ private struct MarkdownMeta: Codable {
     var contactIDs: [UUID]?
     var withdrawn: Bool?
     var addedToJournal: Bool?
+    var hiddenFromJournal: Bool?
     var journalExcerpt: String?
 }
 
@@ -66,7 +67,7 @@ enum PlannerMarkdown {
         return Data(text.utf8)
     }
     private static func completionBlock(_ record: CompletionRecord, summary: Bool = false) throws -> String {
-        let meta = MarkdownMeta(kind: "completion", id: record.id, date: record.date, taskID: record.taskID, domain: record.domain, goalTitle: record.goalTitle, contactIDs: record.contactIDs, withdrawn: record.withdrawn, addedToJournal: record.addedToJournal,
+        let meta = MarkdownMeta(kind: "completion", id: record.id, date: record.date, taskID: record.taskID, domain: record.domain, goalTitle: record.goalTitle, contactIDs: record.contactIDs, withdrawn: record.withdrawn, addedToJournal: record.addedToJournal, hiddenFromJournal: record.hiddenFromJournal,
             journalExcerpt: summary ? nil : record.journalExcerpt)
         // Contact files retain a short standalone record; the monthly journal has the full text.
         return try block(meta, heading: "### \(record.title.replacingOccurrences(of: "\n", with: " "))", text: "完成日期：\(PlannerDates.text(record.date, "yyyy-MM-dd HH:mm"))\n" + (summary ? "" : record.text))
@@ -137,7 +138,7 @@ enum PlannerMarkdown {
             case "completion":
                 guard let date = meta.date, let taskID = meta.taskID else { throw PlannerError.invalidBackup("完成紀錄不完整。") }
                 let detail = body.firstIndex(of: "\n").map { String(body[body.index(after: $0)...]) } ?? ""
-                result.completions.append(CompletionRecord(id: meta.id, taskID: taskID, date: date, title: String(heading), text: detail, domain: meta.domain, goalTitle: meta.goalTitle, contactIDs: meta.contactIDs ?? [], withdrawn: meta.withdrawn, addedToJournal: meta.addedToJournal, journalExcerpt: meta.journalExcerpt))
+                result.completions.append(CompletionRecord(id: meta.id, taskID: taskID, date: date, title: String(heading), text: detail, domain: meta.domain, goalTitle: meta.goalTitle, contactIDs: meta.contactIDs ?? [], withdrawn: meta.withdrawn, addedToJournal: meta.addedToJournal, hiddenFromJournal: meta.hiddenFromJournal, journalExcerpt: meta.journalExcerpt))
             default: throw PlannerError.invalidBackup("文件包含較新版本的紀錄，請先更新 Planner。")
             }
             cursor = nextRecord

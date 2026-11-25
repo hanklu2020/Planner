@@ -227,10 +227,11 @@ struct CompletionRecord: Codable, Identifiable, Equatable {
     var contactIDs: [UUID]
     var withdrawn: Bool?
     var addedToJournal: Bool?
+    var hiddenFromJournal: Bool?
     var journalExcerpt: String?
 
     var isVisible: Bool { withdrawn != true }
-    var appearsInJournal: Bool { isVisible && addedToJournal != true }
+    var appearsInJournal: Bool { isVisible && addedToJournal != true && hiddenFromJournal != true }
     var journalText: String {
         journalExcerpt ?? text.components(separatedBy: "\n").compactMap { line in
             if line.hasPrefix("- [ ] ") { return nil }

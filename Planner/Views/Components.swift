@@ -56,6 +56,10 @@ struct EmptyMessage: View {
     }
 }
 
+enum TaskScheduleDisplay: Equatable {
+    case standard, compact, attention
+}
+
 struct TaskRow: View {
     @EnvironmentObject private var store: PlannerStore
     let task: PlannerTask
@@ -63,6 +67,7 @@ struct TaskRow: View {
     var selected = false
     var onSelect: (() -> Void)?
     var onLongPress: (() -> Void)?
+    var scheduleDisplay: TaskScheduleDisplay = .standard
     @State private var editing: TaskPresentation?
     @State private var scheduling = false
     @State private var expanded = false
@@ -80,32 +85,13 @@ struct TaskRow: View {
                 }
                 .buttonStyle(.borderless).disabled(task.cancelled && !selecting)
                 .accessibilityLabel(selecting ? "選取：\(task.title)" : "完成：\(task.title)")
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(task.title).foregroundStyle(task.cancelled ? .secondary : .primary)
-                        .strikethrough(task.isDone || task.cancelled).frame(maxWidth: .infinity, alignment: .leading)
-                    HStack(spacing: 6) {
-                        if let domain = task.domain { Text(domain.title).foregroundStyle(domain.color) }
-                        if let goal = store.goal(task.goalID) { Text(goal.title).lineLimit(1) }
-                        if !task.steps.isEmpty { Text(task.stepProgress).monospacedDigit() }
-                        if task.focusDate.map({ PlannerDates.calendar.isDateInToday($0) }) == true && task.isOpen && task.schedule?.appears(in: Date(), scale: .day) == true {
-                            Image(systemName: "star.fill").foregroundStyle(.orange).accessibilityLabel("今日重點")
-                        }
-                    }.font(.caption).foregroundStyle(.secondary)
-                    if let deadline = task.deadline {
-                        Text("截止 \(PlannerDates.text(deadline))").font(.caption2)
-                            .foregroundStyle(task.isOverdue() ? Color.red : .secondary)
-                    }
-                }
+                taskLabel
                 .contentShape(Rectangle())
                 .onTapGesture { if selecting { onSelect?() } else { editing = TaskPresentation(task: task) } }
                 .onLongPressGesture { onLongPress?() }
                 if !selecting {
                     if task.isOpen {
-                        Button { scheduling = true } label: {
-                            Text(task.schedule?.label ?? "待安排").font(.caption)
-                                .padding(.horizontal, 9).padding(.vertical, 8)
-                                .background(Color.plannerAccent.opacity(0.08), in: Capsule())
-                        }.buttonStyle(.borderless).accessibilityLabel("安排日期：\(task.title)")
+                        scheduleButton
                     }
                     if !task.steps.isEmpty {
                         Button { expanded.toggle() } label: { Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption).frame(width: 28, height: 40) }
@@ -142,6 +128,57 @@ struct TaskRow: View {
         }
         .sheet(item: $editing) { TaskEditor(initial: $0.task) }
         .sheet(isPresented: $scheduling) { SchedulePicker(taskIDs: [task.id]) }
+    }
+
+    private var taskLabel: some View {
+        let goal = store.goal(task.goalID)
+        let hasFocus = task.focusDate.map { PlannerDates.calendar.isDateInToday($0) } == true && task.isOpen
+            && task.schedule?.appears(in: Date(), scale: .day) == true
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(task.title).foregroundStyle(task.cancelled ? .secondary : .primary)
+                .strikethrough(task.isDone || task.cancelled).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if task.domain != nil || goal != nil || !task.steps.isEmpty || hasFocus {
+                HStack(spacing: 6) {
+                    if let domain = task.domain { Text(domain.title).foregroundStyle(domain.color) }
+                    if let goal { Text(goal.title).lineLimit(1) }
+                    if !task.steps.isEmpty { Text(task.stepProgress).monospacedDigit() }
+                    if hasFocus { Image(systemName: "star.fill").foregroundStyle(.orange).accessibilityLabel("今日重點") }
+                }.font(.caption).foregroundStyle(.secondary)
+            }
+            if scheduleDisplay == .attention, let schedule = task.schedule, schedule.needsAttention() {
+                Text(schedule.scale == .day && PlannerDates.calendar.isDateInYesterday(schedule.date)
+                     ? "原安排在昨天" : "原安排 \(schedule.label) 已過")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            if let deadline = task.deadline {
+                let overdue = task.isOverdue()
+                Text(scheduleDisplay == .attention && overdue ? overdueLabel(deadline) : "截止 \(PlannerDates.text(deadline))")
+                    .font(.caption2).foregroundStyle(overdue ? Color.red : .secondary)
+            }
+        }
+    }
+
+    private var scheduleButton: some View {
+        Button { scheduling = true } label: {
+            Group {
+                switch scheduleDisplay {
+                case .compact:
+                    Image(systemName: "calendar").frame(minWidth: 44, minHeight: 44)
+                case .standard, .attention:
+                    Text(scheduleDisplay == .attention ? (task.schedule == nil ? "安排" : "改期") : task.schedule?.label ?? "待安排")
+                        .padding(.horizontal, 9).padding(.vertical, 7)
+                        .background(Color.plannerAccent.opacity(0.08), in: Capsule())
+                        .frame(minHeight: 44)
+                }
+            }.font(.caption).contentShape(Rectangle())
+        }.buttonStyle(.borderless).accessibilityLabel("安排日期：\(task.title)")
+    }
+
+    private func overdueLabel(_ deadline: Date) -> String {
+        let calendar = PlannerDates.calendar
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: deadline), to: calendar.startOfDay(for: Date())).day ?? 1
+        return "已逾截止日 \(max(1, days)) 天"
     }
 }
 

@@ -382,6 +382,22 @@ final class PlannerStore: ObservableObject {
         }
     }
 
+    func hideJournalCompletion(_ record: CompletionRecord) {
+        guard data.completions.contains(where: { $0.id == record.id && $0.appearsInJournal }),
+              setJournalCompletionHidden(true, id: record.id) else { return }
+        offerUndo("已從日記刪除完成紀錄") { [weak self] in
+            _ = self?.setJournalCompletionHidden(nil, id: record.id)
+        }
+    }
+
+    private func setJournalCompletionHidden(_ hidden: Bool?, id: UUID) -> Bool {
+        commit { document in
+            if let index = document.completions.firstIndex(where: { $0.id == id }) {
+                document.completions[index].hiddenFromJournal = hidden
+            }
+        }
+    }
+
     func canReopen(_ record: CompletionRecord) -> Bool {
         guard record.isVisible, let date = task(record.taskID)?.completedAt else { return false }
         return abs(date.timeIntervalSince(record.date)) < 1

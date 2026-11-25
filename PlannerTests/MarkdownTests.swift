@@ -45,6 +45,22 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(loaded.completions, original); XCTAssertEqual(loaded.journal, doc.journal)
         XCTAssertTrue(loaded.tasks.isEmpty); XCTAssertEqual(loaded.contacts.count, 1)
     }
+    func testDeletedJournalCompletionStaysHiddenAfterReload() throws {
+        let root = try temporary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var document = fixture()
+        let vault = MarkdownVault(directory: root)
+        try vault.save(document)
+        document.completions[0].hiddenFromJournal = true
+        try vault.save(document)
+
+        let loaded = try XCTUnwrap(MarkdownVault(directory: root).load())
+        let record = try XCTUnwrap(loaded.completions.first)
+        XCTAssertFalse(record.appearsInJournal)
+        XCTAssertTrue(record.isVisible)
+        XCTAssertTrue(loaded.tasks.first?.isDone == true)
+    }
+
     func testMissingAndCorruptCoreRebuildFromMarkdown() throws {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
         let doc = fixture(); try MarkdownVault(directory: root).save(doc)
