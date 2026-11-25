@@ -1,4 +1,4 @@
-# Planner 2.0
+# Planner 2.1
 
 Native SwiftUI iPhone app, iOS 17+, with four fixed tabs: **目標｜計畫｜日記｜人脈**. Works offline without an account or server. The bundle identifier remains `com.personalplanner.mvp` for continuity with the original app.
 
@@ -43,3 +43,16 @@ open Planner.xcodeproj
 Sources are separated into Foundation models/persistence, a transactional shared store, and SwiftUI views. XcodeGen generates app and test targets from `project.yml`. Linux cannot run Xcode; compilation and simulator checks run on the macOS Actions runner. Physical-device gesture, keyboard and AltStore update behavior require a device check.
 
 Data stays on the device. Export a complete backup through **目標 → 設定與備份** before deleting the app or moving devices. Full English interface localization, recurrence, automatic reminders, cross-device sync and a server are not included in this release.
+
+## 2.1 — Folder storage and durable Markdown
+
+- Startup opens the remembered data folder directly. Missing/unreadable data shows **選擇資料夾 / 重新開始**, with the default **On My iPhone / Planner** location. No backup is required to begin.
+- Journal content and completion snapshots are stored in `日記/YYYY-MM.md`; each person has a readable `人脈/Name--ID.md`. Small HTML comments preserve IDs and ISO dates; actual text is ordinary Markdown. Keep those markers when editing files externally.
+- `.planner/state.json` contains disposable goals, plans and tasks. Losing or clearing that file does not remove Markdown history. Existing 2.0 JSON and common legacy UserDefaults variants migrate without deleting originals. Partial legacy recovery keeps raw source copies.
+- Completed-task history is now an independent snapshot. Renaming, reopening, cancelling or deleting a task does not erase prior journal/contact records. This intentionally replaces the 2.0 derived-history behavior.
+- A serial background writer coalesces rapid edits and writes only changed files. Planning-only updates do not regenerate Markdown. Atomic file replacement and a temporary write-ahead snapshot support interrupted-save recovery. External changes are detected before overwriting; reload preserves unsaved changes as a separate recovery JSON when possible.
+- Use Settings to inspect files, reopen a folder, change location, reload external changes, or save a complete folder/JSON backup. Folder backups are marked and restored to a new working folder so the backup is not edited in place.
+- The app exposes Documents in Files. App-owned local folders can be removed when uninstalling; put important backups in a separate user-selected location. Files access is limited to the selected folder and remembered using a system bookmark.
+- Settings can clear disposable plans while leaving all Markdown records intact. There is no whole-phone scan, cloud account, server or new permission to read system contacts/calendars.
+
+Validation status for 2.1: local Swift syntax and project configuration checks pass. The new Xcode build, unit tests and simulator tests have NOT run yet because automatic approval review blocked publishing the source changes to the public GitHub repository. The last verified IPA is 2.0.0; this package is reviewable 2.1 source, not a compiled IPA.

@@ -8,9 +8,9 @@ struct JournalView: View {
     @State private var scrolledToLatest = false
     private var cutoff: Date { PlannerDates.shifted(PlannerDates.calendar.startOfDay(for: Date()), .day, by: -visibleDays) }
     private var entries: [JournalEntry] { store.data.journal.filter { $0.date >= cutoff && (search.isEmpty || $0.text.localizedCaseInsensitiveContains(search)) } }
-    private var tasks: [PlannerTask] { store.data.tasks.filter { ($0.completedAt ?? .distantPast) >= cutoff && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) } }
-    private var days: [Date] { Set(entries.map { PlannerDates.calendar.startOfDay(for: $0.date) } + tasks.compactMap { $0.completedAt.map { PlannerDates.calendar.startOfDay(for: $0) } }).sorted() }
-    private var hasEarlier: Bool { store.data.journal.contains { $0.date < cutoff } || store.data.tasks.contains { $0.completedAt.map { $0 < cutoff } == true } }
+    private var tasks: [CompletionRecord] { store.data.completions.filter { $0.date >= cutoff && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) } }
+    private var days: [Date] { Set(entries.map { PlannerDates.calendar.startOfDay(for: $0.date) } + tasks.map { PlannerDates.calendar.startOfDay(for: $0.date) }).sorted() }
+    private var hasEarlier: Bool { store.data.journal.contains { $0.date < cutoff } || store.data.completions.contains { $0.date < cutoff } }
     var body: some View {
         NavigationStack {
             ScrollViewReader { proxy in
@@ -28,10 +28,10 @@ struct JournalView: View {
                                 }.buttonStyle(.plain)
                                 .swipeActions { Button("刪除", role: .destructive) { _ = store.commit { $0.journal.removeAll { $0.id == entry.id } } } }
                             }
-                            let finished = tasks.filter { $0.completedAt.map { PlannerDates.calendar.isDate($0, inSameDayAs: day) } == true }
+                            let finished = tasks.filter { PlannerDates.calendar.isDate($0.date, inSameDayAs: day) }
                             if !finished.isEmpty {
                                 DisclosureGroup("\(isRecent(day) ? "最近完成" : "完成紀錄") · \(finished.count) 項") {
-                                    ForEach(finished) { TaskRow(task: $0) }
+                                    ForEach(finished) { CompletionRow(record: $0) }
                                 }
                             }
                         }.id(day)
@@ -68,7 +68,7 @@ struct JournalEditor: View {
             .navigationTitle("寫日記").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("儲存") { if store.saveJournal(value) { dismiss() } }.disabled(value.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).accessibilityIdentifier("saveJournal") }
+                ToolbarItem(placement: .confirmationAction) { Button("儲存") { Task { if store.saveJournal(value) { await store.flush(); if !store.saveFailed { dismiss() } } } }.disabled(value.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).accessibilityIdentifier("saveJournal") }
             }
         }
     }

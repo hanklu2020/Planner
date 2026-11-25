@@ -202,8 +202,19 @@ struct GoalReview: Codable, Identifiable, Equatable {
     var decision = ""
 }
 
+struct CompletionRecord: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var taskID: UUID
+    var date: Date
+    var title: String
+    var text: String
+    var domain: Domain?
+    var goalTitle: String?
+    var contactIDs: [UUID]
+}
+
 struct PlannerDocument: Codable, Equatable {
-    static let currentVersion = 2
+    static let currentVersion = 3
     var version = currentVersion
     var goals: [Goal] = []
     var tasks: [PlannerTask] = []
@@ -211,13 +222,43 @@ struct PlannerDocument: Codable, Equatable {
     var contacts: [Contact] = []
     var interactions: [Interaction] = []
     var reviews: [GoalReview] = []
+    var completions: [CompletionRecord] = []
+
+    init() {}
+    enum CodingKeys: String, CodingKey { case version, goals, tasks, journal, contacts, interactions, reviews, completions }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 2
+        guard version == 2 || version == Self.currentVersion else { throw PlannerError.invalidBackup("不支援此備份版本。") }
+        guard !c.allKeys.isEmpty else { throw PlannerError.invalidBackup("沒有可辨識的 Planner 資料。") }
+        self.version = Self.currentVersion
+        goals = try c.decodeIfPresent([Goal].self, forKey: .goals) ?? []
+        tasks = try c.decodeIfPresent([PlannerTask].self, forKey: .tasks) ?? []
+        journal = try c.decodeIfPresent([JournalEntry].self, forKey: .journal) ?? []
+        contacts = try c.decodeIfPresent([Contact].self, forKey: .contacts) ?? []
+        interactions = try c.decodeIfPresent([Interaction].self, forKey: .interactions) ?? []
+        reviews = try c.decodeIfPresent([GoalReview].self, forKey: .reviews) ?? []
+        completions = try c.decodeIfPresent([CompletionRecord].self, forKey: .completions) ?? []
+    }
+
+    mutating func captureCompletions() {
+        // A historical record never depends on the continued existence of its task.
+        let recorded = Set(completions.map(\.taskID))
+        let titles = Dictionary(goals.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        for task in tasks where task.isDone && !task.cancelled && !recorded.contains(task.id) {
+            let steps = task.steps.map { "- [\($0.done ? "x" : " ")] \($0.title)" }.joined(separator: "\n")
+            completions.append(CompletionRecord(taskID: task.id, date: task.completedAt!, title: task.title,
+                text: [task.notes, steps].filter { !$0.isEmpty }.joined(separator: "\n\n"), domain: task.domain,
+                goalTitle: task.goalID.flatMap { titles[$0] }, contactIDs: task.contactIDs))
+        }
+    }
 
     func validated() throws -> Self {
         guard version == Self.currentVersion else { throw PlannerError.invalidBackup("不支援此備份版本，請使用相容版本的 Planner。") }
         func unique<T: Identifiable>(_ values: [T]) -> Bool where T.ID == UUID {
             Set(values.map(\.id)).count == values.count
         }
-        guard unique(goals), unique(tasks), unique(journal), unique(contacts), unique(interactions), unique(reviews),
+        guard unique(goals), unique(tasks), unique(journal), unique(contacts), unique(interactions), unique(reviews), unique(completions),
               tasks.allSatisfy({ unique($0.steps) }) else { throw PlannerError.invalidBackup("備份含有重複項目。") }
         let goalIDs = Set(goals.map(\.id)), contactIDs = Set(contacts.map(\.id))
         guard tasks.allSatisfy({ task in
@@ -241,13 +282,35 @@ struct LegacyRecord: Codable {
     var id: UUID
     var text: String
     var done: Bool
+    init(id: UUID, text: String, done: Bool) { self.id = id; self.text = text; self.done = done }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        text = try c.decodeIfPresent(String.self, forKey: .text)
+            ?? c.decodeIfPresent(String.self, forKey: .title)
+            ?? c.decodeIfPresent(String.self, forKey: .name)
+            ?? c.decode(String.self, forKey: .content)
+        done = try c.decodeIfPresent(Bool.self, forKey: .done) ?? c.decodeIfPresent(Bool.self, forKey: .isCompleted) ?? false
+    }
+    private enum Keys: String, CodingKey { case id, text, title, name, content, done, isCompleted }
+}
+
+enum LegacyStorage {
+    static func bytes(_ key: String, defaults: UserDefaults) -> Data? {
+        if let data = defaults.data(forKey: key) { return data }
+        if let text = defaults.string(forKey: key) { return Data(text.utf8) }
+        if let value = defaults.object(forKey: key), JSONSerialization.isValidJSONObject(value) {
+            return try? JSONSerialization.data(withJSONObject: value)
+        }
+        return nil
+    }
 }
 
 enum PlannerMigration {
     static func migrate(defaults: UserDefaults, now: Date = Date()) throws -> PlannerDocument {
         var result = PlannerDocument()
         func rows(_ key: String) throws -> [LegacyRecord] {
-            guard let data = defaults.data(forKey: key), !data.isEmpty else { return [] }
+            guard let data = LegacyStorage.bytes(key, defaults: defaults), !data.isEmpty else { return [] }
             return try JSONDecoder().decode([LegacyRecord].self, from: data)
         }
         result.tasks = try rows("tasks").map {

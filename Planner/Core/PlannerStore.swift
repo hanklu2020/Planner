@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @MainActor
 final class PlannerStore: ObservableObject {
@@ -8,28 +9,132 @@ final class PlannerStore: ObservableObject {
     @Published var pendingGoalID: UUID?
     @Published var notice: String?
     @Published private(set) var canUndoSchedule = false
+    @Published private(set) var loading = false
+    @Published private(set) var isSaving = false
+    @Published private(set) var directory: URL?
+    @Published var startupReason = ""
+    @Published private(set) var saveFailed = false
     private let disk: PlannerDisk
+    private let defaults: UserDefaults
+    private let folderStorage: Bool
+    private let files: FolderSession
+    private var saveRevision = 0
+    private var backgroundID: UIBackgroundTaskIdentifier = .invalid
     private var scheduleUndo: [(id: UUID, schedule: Schedule?)] = []
 
-    init(disk: PlannerDisk = .standard, defaults: UserDefaults = .standard) {
-        self.disk = disk
-        do {
-            let loaded = try disk.load(defaults: defaults)
-            try disk.save(loaded)
-            data = loaded
-        } catch {
-            recoveryRequired = true
-            self.error = "無法讀取原資料，已停止寫入以保留檔案。\n\(error.localizedDescription)"
+    init(folderStorage: Bool = true, disk: PlannerDisk = .standard, defaults: UserDefaults = .standard) {
+        self.disk = disk; self.defaults = defaults; self.folderStorage = folderStorage
+        self.files = FolderSession(legacy: disk, defaults: defaults)
+        if folderStorage {
+            loading = true
+            Task { await openLastFolder() }
+        } else {
+            do { let loaded = try disk.load(defaults: defaults); try disk.save(loaded); data = loaded }
+            catch { recoveryRequired = true; self.error = "無法讀取原資料：\(error.localizedDescription)" }
         }
     }
-
+    private func rememberedDirectory() throws -> URL {
+        if let relative = defaults.string(forKey: "Planner.folder.relative") {
+            return relative.isEmpty ? MarkdownVault.defaultDirectory : MarkdownVault.defaultDirectory.appendingPathComponent(relative, isDirectory: true)
+        }
+        if let bytes = defaults.data(forKey: "Planner.folder.bookmark") {
+            var stale = false
+            let url = try URL(resolvingBookmarkData: bytes, options: .withoutUI, bookmarkDataIsStale: &stale)
+            return url
+        }
+        return MarkdownVault.defaultDirectory
+    }
+    private func adopt(_ opened: OpenedFolder) throws {
+        let root = MarkdownVault.defaultDirectory.standardizedFileURL.path
+        let path = opened.directory.standardizedFileURL.path
+        if path == root || path.hasPrefix(root + "/") {
+            defaults.set(path == root ? "" : String(path.dropFirst(root.count + 1)), forKey: "Planner.folder.relative")
+            defaults.removeObject(forKey: "Planner.folder.bookmark")
+        } else {
+            let scoped = opened.directory.startAccessingSecurityScopedResource()
+            defer { if scoped { opened.directory.stopAccessingSecurityScopedResource() } }
+            do {
+                let bookmark = try opened.directory.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+                defaults.set(bookmark, forKey: "Planner.folder.bookmark")
+            } catch {
+                defaults.set(Data(), forKey: "Planner.folder.bookmark")
+                self.error = "目前資料夾可用，但無法記住位置；下次開啟時請重新選擇。"
+            }
+            defaults.removeObject(forKey: "Planner.folder.relative")
+        }
+        data = opened.document; directory = opened.directory
+        recoveryRequired = false; startupReason = ""; error = nil; saveFailed = false
+        notice = opened.notice; clearUndo(); pendingGoalID = nil
+    }
+    func openLastFolder() async {
+        guard !isSaving else { return }
+        loading = true
+        defer { loading = false }
+        do {
+            let remembered = defaults.object(forKey: "Planner.folder.relative") != nil || defaults.data(forKey: "Planner.folder.bookmark") != nil
+            try adopt(await files.open(rememberedDirectory(), migrateLegacy: !remembered))
+        } catch { recoveryRequired = true; startupReason = error.localizedDescription }
+    }
+    func openFolder(_ url: URL) async {
+        loading = true; defer { loading = false }
+        do { try adopt(await files.open(url)) }
+        catch { self.error = error.localizedDescription }
+    }
+    func startNew(in folder: URL? = nil) async {
+        loading = true; defer { loading = false }
+        do { try adopt(await files.create(in: folder ?? MarkdownVault.defaultDirectory)) }
+        catch { self.error = error.localizedDescription }
+    }
+    func moveFolder(to folder: URL) async {
+        guard !recoveryRequired else { return }
+        loading = true; defer { loading = false }
+        do { try adopt(await files.create(in: folder, document: data)); notice = "已切換儲存位置，原資料保留。" }
+        catch { self.error = error.localizedDescription }
+    }
+    func backupFolder(to folder: URL) async {
+        loading = true; defer { loading = false }
+        do { _ = try await files.copy(data, to: folder); notice = "已另存完整備份。" }
+        catch { self.error = error.localizedDescription }
+    }
+    func reloadFolder() async {
+        loading = true; defer { loading = false }
+        do { try adopt(await files.reload()) }
+        catch { self.error = error.localizedDescription }
+    }
+    func flush() async {
+        guard folderStorage else { return }
+        do { try await files.flush(); isSaving = false; saveFailed = false }
+        catch { self.error = "資料尚未儲存，請重試或先匯出備份：\(error.localizedDescription)"; saveFailed = true; isSaving = false }
+    }
+    func flushForBackground() {
+        guard folderStorage, !recoveryRequired, backgroundID == .invalid else { return }
+        backgroundID = UIApplication.shared.beginBackgroundTask(withName: "Save Planner") { [weak self] in
+            Task { @MainActor in self?.endBackgroundSave() }
+        }
+        Task { await flush(); endBackgroundSave() }
+    }
+    private func endBackgroundSave() {
+        if backgroundID != .invalid { UIApplication.shared.endBackgroundTask(backgroundID); backgroundID = .invalid }
+    }
     @discardableResult
     func commit(_ change: (inout PlannerDocument) -> Void) -> Bool {
-        guard !recoveryRequired else { error = "請先從設定還原資料，再進行編輯。"; return false }
-        var next = data
-        change(&next)
-        do { try disk.save(next); data = next; return true }
-        catch { self.error = "未能儲存這次變更：\(error.localizedDescription)"; return false }
+        guard !recoveryRequired, !loading else { error = "請先選擇資料夾或重新開始。"; return false }
+        var next = data; change(&next)
+        if folderStorage { next.captureCompletions() }
+        do {
+            _ = try next.validated()
+            if folderStorage {
+                let urgent = data.journal != next.journal || data.contacts != next.contacts || data.interactions != next.interactions || data.completions != next.completions
+                data = next; isSaving = true; saveRevision += 1
+                let revision = saveRevision
+                files.enqueue(next, urgent: urgent) { [weak self] failure in
+                    guard let self, self.saveRevision == revision else { return }
+                    self.isSaving = false; self.saveFailed = failure != nil
+                    if let failure { self.error = "資料尚未儲存，內容仍保留在畫面中。\n\(failure)" }
+                }
+            } else { try disk.save(next); data = next }
+            return true
+        } catch { self.error = "未能儲存：\(error.localizedDescription)"; return false }
     }
     func task(_ id: UUID) -> PlannerTask? { data.tasks.first { $0.id == id } }
     func goal(_ id: UUID?) -> Goal? { data.goals.first { $0.id == id } }
@@ -193,13 +298,20 @@ final class PlannerStore: ObservableObject {
     func importData(_ bytes: Data) -> Bool {
         do {
             let imported = try PlannerDisk.decode(bytes)
-            try disk.save(imported)
-            data = imported; recoveryRequired = false; clearUndo(); pendingGoalID = nil
-            notice = "資料已還原"; return true
+            if folderStorage {
+                Task {
+                    loading = true; defer { loading = false }
+                    do { try adopt(await files.create(in: directory ?? MarkdownVault.defaultDirectory, document: imported)); notice = "已還原備份，原資料保留。" }
+                    catch { self.error = error.localizedDescription }
+                }
+            } else {
+                try disk.save(imported); data = imported; recoveryRequired = false; clearUndo(); pendingGoalID = nil
+            }
+            return true
         } catch { self.error = "無法還原：\(error.localizedDescription)"; return false }
     }
     func restorePrevious() {
         do { _ = importData(try Data(contentsOf: disk.backup)) }
-        catch { self.error = "無法讀取上一份資料：\(error.localizedDescription)" }
+        catch { self.error = "找不到上一份資料。可選擇資料夾，或重新開始。" }
     }
 }

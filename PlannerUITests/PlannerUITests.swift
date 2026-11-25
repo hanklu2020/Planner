@@ -4,8 +4,20 @@ final class PlannerUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
     @MainActor
+    private func prepare(_ app: XCUIApplication) {
+        let ready = app.tabBars.buttons["目標"]
+        let start = app.buttons["startNewMenu"]
+        let predicate = NSPredicate { _, _ in ready.exists || start.exists }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 20), .completed)
+        if start.exists {
+            start.tap(); app.buttons["startNewDefault"].tap()
+        }
+        XCTAssertTrue(ready.waitForExistence(timeout: 20))
+    }
+
+    @MainActor
     func testCreateGoalTaskScheduleAndComplete() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = XCUIApplication(); app.launch(); prepare(app)
         for name in ["目標", "計畫", "日記", "人脈"] { XCTAssertTrue(app.tabBars.buttons[name].exists) }
         XCTAssertTrue(app.buttons["domain_spiritual"].exists)
         XCTAssertTrue(app.buttons["domain_work"].exists)
@@ -36,7 +48,7 @@ final class PlannerUITests: XCTestCase {
 
     @MainActor
     func testUnplannedBulkAndContinuousScheduling() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = XCUIApplication(); app.launch(); prepare(app)
         app.tabBars.buttons["計畫"].tap()
         app.buttons["filter_待安排"].tap()
         let suffix = String(UUID().uuidString.prefix(4))

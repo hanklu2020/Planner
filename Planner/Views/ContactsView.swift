@@ -59,7 +59,7 @@ struct ContactEditor: View {
             .navigationTitle("聯絡人").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("儲存") { if store.saveContact(value) { dismiss() } }.disabled(value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).accessibilityIdentifier("saveContact") }
+                ToolbarItem(placement: .confirmationAction) { Button("儲存") { Task { if store.saveContact(value) { await store.flush(); if !store.saveFailed { dismiss() } } } }.disabled(value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).accessibilityIdentifier("saveContact") }
             }
         }
     }
@@ -86,7 +86,7 @@ struct ContactDetailView: View {
                 Section("往來紀錄") {
                     Button("記錄往來", systemImage: "square.and.pencil") { entry = Interaction(contactID: contactID) }
                     let manual = store.data.interactions.filter { $0.contactID == contactID }.sorted { $0.date > $1.date }
-                    let completed = store.data.tasks.filter { $0.isDone && $0.contactIDs.contains(contactID) }.sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
+                    let completed = store.data.completions.filter { $0.contactIDs.contains(contactID) }.sorted { $0.date > $1.date }
                     let events = (manual.map { ContactEvent.interaction($0) } + completed.map { ContactEvent.task($0) }).sorted { $0.date > $1.date }
                     if events.isEmpty { Text("目前沒有往來紀錄").font(.subheadline).foregroundStyle(.secondary) }
                     ForEach(events) { event in
@@ -98,8 +98,8 @@ struct ContactDetailView: View {
                             .swipeActions { Button("刪除", role: .destructive) { _ = store.commit { $0.interactions.removeAll { $0.id == value.id } } } }
                         case .task(let value):
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(PlannerDates.text(value.completedAt!, "yyyy/M/d") + " · 已完成任務").font(.caption).foregroundStyle(.secondary)
-                                TaskRow(task: value)
+                                Text(PlannerDates.text(value.date, "yyyy/M/d") + " · 已完成任務").font(.caption).foregroundStyle(.secondary)
+                                CompletionRow(record: value)
                             }
                         }
                     }
@@ -131,9 +131,9 @@ struct ContactDetailView: View {
 }
 
 private enum ContactEvent: Identifiable {
-    case interaction(Interaction), task(PlannerTask)
+    case interaction(Interaction), task(CompletionRecord)
     var id: String { switch self { case .interaction(let v): return "interaction-\(v.id)"; case .task(let v): return "task-\(v.id)" } }
-    var date: Date { switch self { case .interaction(let v): return v.date; case .task(let v): return v.completedAt ?? .distantPast } }
+    var date: Date { switch self { case .interaction(let v): return v.date; case .task(let v): return v.date } }
 }
 
 struct InteractionEditor: View {
@@ -151,7 +151,7 @@ struct InteractionEditor: View {
             .navigationTitle("記錄往來").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("儲存") { if store.saveInteraction(value) { dismiss() } }.disabled(value.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                ToolbarItem(placement: .confirmationAction) { Button("儲存") { Task { if store.saveInteraction(value) { await store.flush(); if !store.saveFailed { dismiss() } } } }.disabled(value.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
             }
         }
     }

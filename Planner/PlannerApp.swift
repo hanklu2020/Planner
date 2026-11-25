@@ -16,16 +16,18 @@ struct ContentView: View {
     @State private var tab = 0
     @State private var showingSettings = false
     var body: some View {
-        TabView(selection: $tab) {
-            GoalsView().tabItem { Label("目標", systemImage: "scope") }.tag(0)
-            PlanView().tabItem { Label("計畫", systemImage: "calendar") }.tag(1)
-            JournalView().tabItem { Label("日記", systemImage: "book.closed") }.tag(2)
-            ContactsView().tabItem { Label("人脈", systemImage: "person.2") }.tag(3)
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if store.recoveryRequired {
-                Button("資料需要還原，點此開啟設定", systemImage: "exclamationmark.icloud") { showingSettings = true }
-                    .font(.callout).padding(10).frame(maxWidth: .infinity).background(.orange.opacity(0.15))
+        Group {
+            if store.loading && store.directory == nil {
+                ProgressView("正在讀取資料…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if store.recoveryRequired {
+                StartupView()
+            } else {
+                TabView(selection: $tab) {
+                    GoalsView().tabItem { Label("目標", systemImage: "scope") }.tag(0)
+                    PlanView().tabItem { Label("計畫", systemImage: "calendar") }.tag(1)
+                    JournalView().tabItem { Label("日記", systemImage: "book.closed") }.tag(2)
+                    ContactsView().tabItem { Label("人脈", systemImage: "person.2") }.tag(3)
+                }.disabled(store.loading)
             }
         }
         .overlay(alignment: .bottom) {
@@ -45,6 +47,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, value in
             // Refresh relative dates and overdue indicators after midnight / foregrounding.
             if value == .active { store.objectWillChange.send() }
+            else { store.flushForBackground() }
         }
     }
 }

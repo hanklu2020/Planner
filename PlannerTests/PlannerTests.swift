@@ -147,7 +147,7 @@ final class PlannerTests: XCTestCase {
         _ = store.saveTask(PlannerTask(title: "保留"))
         let disk = PlannerDisk(directory: directory), bad = Data("not-json".utf8)
         try bad.write(to: disk.file)
-        let recovered = PlannerStore(disk: disk, defaults: defaults)
+        let recovered = PlannerStore(folderStorage: false, disk: disk, defaults: defaults)
         XCTAssertTrue(recovered.recoveryRequired)
         XCTAssertFalse(recovered.saveTask(PlannerTask(title: "不可覆寫")))
         XCTAssertEqual(try Data(contentsOf: disk.file), bad)
@@ -170,6 +170,6 @@ final class PlannerTests: XCTestCase {
     private func makeStore() -> (PlannerStore, URL, UserDefaults, String) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let suite = "PlannerTests-\(UUID())", defaults = UserDefaults(suiteName: suite)!
-        return (PlannerStore(disk: PlannerDisk(directory: directory), defaults: defaults), directory, defaults, suite)
+        return (PlannerStore(folderStorage: false, disk: PlannerDisk(directory: directory), defaults: defaults), directory, defaults, suite)
     }
 }
