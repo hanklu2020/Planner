@@ -17,6 +17,7 @@ private struct MarkdownMeta: Codable {
     var addedToJournal: Bool?
     var hiddenFromJournal: Bool?
     var journalExcerpt: String?
+    var completionDay: String?
 }
 
 struct MarkdownContent {
@@ -47,7 +48,7 @@ enum PlannerMarkdown {
             blocks.append((entry.date, entry.id.uuidString, try block(MarkdownMeta(kind: "journal", id: entry.id, date: entry.date, language: entry.language),
                 heading: "## \(PlannerDates.text(entry.date, "yyyy-MM-dd HH:mm"))", text: entry.text)))
         }
-        for record in completions { blocks.append((record.date, record.id.uuidString, try completionBlock(record))) }
+        for record in completions { blocks.append((record.journalDate, record.id.uuidString, try completionBlock(record))) }
         let text = signature + "\n# \(month) 日記\n\n" + blocks.sorted { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 < $1.0 }.map { $0.2 }.joined()
         return Data(text.utf8)
     }
@@ -68,9 +69,11 @@ enum PlannerMarkdown {
     }
     private static func completionBlock(_ record: CompletionRecord, summary: Bool = false) throws -> String {
         let meta = MarkdownMeta(kind: "completion", id: record.id, date: record.date, taskID: record.taskID, domain: record.domain, goalTitle: record.goalTitle, contactIDs: record.contactIDs, withdrawn: record.withdrawn, addedToJournal: record.addedToJournal, hiddenFromJournal: record.hiddenFromJournal,
-            journalExcerpt: summary ? nil : record.journalExcerpt)
+            journalExcerpt: summary ? nil : record.journalExcerpt, completionDay: record.completionDay)
         // Contact files retain a short standalone record; the monthly journal has the full text.
-        return try block(meta, heading: "### \(record.title.replacingOccurrences(of: "\n", with: " "))", text: "完成日期：\(PlannerDates.text(record.date, "yyyy-MM-dd HH:mm"))\n" + (summary ? "" : record.text))
+        let date = summary ? record.date : record.journalDate
+        let dateLabel = PlannerDates.text(date, date == record.date ? "yyyy-MM-dd HH:mm" : "yyyy-MM-dd")
+        return try block(meta, heading: "### \(record.title.replacingOccurrences(of: "\n", with: " "))", text: "完成日期：\(dateLabel)\n" + (summary ? "" : record.text))
     }
     private static func cursorAfterRecord(_ index: String.Index, in text: String) -> String.Index {
         text[index...].firstIndex { !$0.isWhitespace } ?? text.endIndex
@@ -138,7 +141,7 @@ enum PlannerMarkdown {
             case "completion":
                 guard let date = meta.date, let taskID = meta.taskID else { throw PlannerError.invalidBackup("完成紀錄不完整。") }
                 let detail = body.firstIndex(of: "\n").map { String(body[body.index(after: $0)...]) } ?? ""
-                result.completions.append(CompletionRecord(id: meta.id, taskID: taskID, date: date, title: String(heading), text: detail, domain: meta.domain, goalTitle: meta.goalTitle, contactIDs: meta.contactIDs ?? [], withdrawn: meta.withdrawn, addedToJournal: meta.addedToJournal, hiddenFromJournal: meta.hiddenFromJournal, journalExcerpt: meta.journalExcerpt))
+                result.completions.append(CompletionRecord(id: meta.id, taskID: taskID, date: date, title: heading, text: detail, domain: meta.domain, goalTitle: meta.goalTitle, contactIDs: meta.contactIDs ?? [], withdrawn: meta.withdrawn, addedToJournal: meta.addedToJournal, hiddenFromJournal: meta.hiddenFromJournal, journalExcerpt: meta.journalExcerpt, completionDay: meta.completionDay))
             default: throw PlannerError.invalidBackup("文件包含較新版本的紀錄，請先更新 Planner。")
             }
             cursor = nextRecord
@@ -289,9 +292,9 @@ final class MarkdownVault {
         } else {
             result = [:]
             let entries = Dictionary(grouping: document.journal) { PlannerDates.text($0.date, "yyyy-MM") }
-            let records = Dictionary(grouping: document.completions) { PlannerDates.text($0.date, "yyyy-MM") }
+            let records = Dictionary(grouping: document.completions) { PlannerDates.text($0.journalDate, "yyyy-MM") }
             let oldEntries = Dictionary(grouping: last?.journal ?? []) { PlannerDates.text($0.date, "yyyy-MM") }
-            let oldRecords = Dictionary(grouping: last?.completions ?? []) { PlannerDates.text($0.date, "yyyy-MM") }
+            let oldRecords = Dictionary(grouping: last?.completions ?? []) { PlannerDates.text($0.journalDate, "yyyy-MM") }
             for month in Set(entries.keys).union(records.keys) {
                 let path = "Journal/\(month).md"
                 if let cached = expected[path], !repair, entries[month] == oldEntries[month], records[month] == oldRecords[month] {

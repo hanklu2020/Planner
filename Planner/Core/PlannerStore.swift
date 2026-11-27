@@ -191,7 +191,7 @@ final class PlannerStore: ObservableObject {
         return success
     }
     @discardableResult
-    func saveTask(_ value: PlannerTask) -> Bool {
+    func saveTask(_ value: PlannerTask, completedOn planDay: Date? = nil) -> Bool {
         var value = value
         value.title = value.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.title.isEmpty else { return false }
@@ -199,6 +199,11 @@ final class PlannerStore: ObservableObject {
         if value.cancelled { value.completedAt = nil; value.focusDate = nil }
         if let goal = goal(value.goalID) { value.domain = goal.domain }
         let old = task(value.id)
+        if let date = value.completedAt {
+            value.completionDay = date == old?.completedAt ? old?.completionDay : PlannerDates.text(planDay ?? date, "yyyy-MM-dd")
+        } else {
+            value.completionDay = nil
+        }
         if let old {
             value.planOrder = old.planOrder
             value.planningHistory = old.planningHistory
@@ -231,17 +236,17 @@ final class PlannerStore: ObservableObject {
             for (index, task) in zip(indices, tasks) { document.tasks[index] = task }
         }
     }
-    func toggleDone(_ id: UUID) {
+    func toggleDone(_ id: UUID, completedOn planDay: Date? = nil) {
         guard var value = task(id), !value.cancelled else { return }
         value.completedAt = value.isDone ? nil : Date()
         if value.isDone { for i in value.steps.indices { value.steps[i].done = true } }
-        if saveTask(value), value.isDone { checkGoal(value.goalID) }
+        saveTask(value, completedOn: planDay)
     }
-    func toggleStep(_ taskID: UUID, stepID: UUID) {
+    func toggleStep(_ taskID: UUID, stepID: UUID, completedOn planDay: Date? = nil) {
         guard var value = task(taskID), let index = value.steps.firstIndex(where: { $0.id == stepID }), !value.cancelled else { return }
         value.steps[index].done.toggle()
         value.completedAt = value.steps.allSatisfy(\.done) ? (value.completedAt ?? Date()) : nil
-        if saveTask(value), value.isDone { checkGoal(value.goalID) }
+        saveTask(value, completedOn: planDay)
     }
     private func checkGoal(_ id: UUID?) {
         guard let id, let goal = goal(id), goal.status == .active else { return }
@@ -364,7 +369,8 @@ final class PlannerStore: ObservableObject {
         return a.id.uuidString < b.id.uuidString
     }
 
-    func journalEntry(on date: Date, adding record: CompletionRecord? = nil) -> JournalEntry {
+    func journalEntry(on date: Date = Date(), adding record: CompletionRecord? = nil) -> JournalEntry {
+        let date = record?.journalDate ?? date
         var entry = data.journal.filter { PlannerDates.calendar.isDate($0.date, inSameDayAs: date) }
             .max { $0.date < $1.date } ?? JournalEntry(date: date)
         if let record {
@@ -372,6 +378,11 @@ final class PlannerStore: ObservableObject {
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: "\n\n")
         }
         return entry
+    }
+
+    func correctCompletionDate(_ ids: Set<UUID>, to date: Date) -> Bool {
+        guard !ids.isEmpty else { return false }
+        return commit { $0.correctCompletionDay(PlannerDates.text(date, "yyyy-MM-dd"), for: ids) }
     }
 
     func finishJournalAddition(_ id: UUID) {
@@ -411,6 +422,7 @@ final class PlannerStore: ObservableObject {
         offerUndo("已取消完成") { [weak self] in
             guard let self, var current = self.task(original.id), current.isOpen else { return }
             current.completedAt = original.completedAt
+            current.completionDay = original.completionDay
             self.commit { document in
                 if let i = document.tasks.firstIndex(where: { $0.id == original.id }) { document.tasks[i] = current }
                 if let i = document.completions.firstIndex(where: { $0.id == record.id }) { document.completions[i].withdrawn = nil }

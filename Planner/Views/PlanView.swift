@@ -38,6 +38,7 @@ private struct PlanScope: Equatable {
 
     var isSearching: Bool { !term.isEmpty }
     var usesCalendar: Bool { filter == .scheduled && !(isSearching && searchesAll) }
+    var completionDay: Date? { usesCalendar && scale == .day ? anchor : nil }
 }
 
 private struct PlanRows {
@@ -143,7 +144,7 @@ struct PlanView: View {
                 showDone = false
             }
             .onChange(of: rows.active.map(\.id)) { _, ids in selected.formIntersection(ids) }
-            .sheet(item: $editing) { TaskEditor(initial: $0.task) }
+            .sheet(item: $editing) { TaskEditor(initial: $0.task, completionDay: scope.completionDay) }
             .sheet(item: $picker, onDismiss: endSelecting) { SchedulePicker(taskIDs: $0.taskIDs) }
             .sheet(item: $queue, onDismiss: endSelecting) { SequentialScheduleView(taskIDs: $0.taskIDs) }
             .sheet(isPresented: $dateSheet) { periodPicker }
@@ -349,7 +350,7 @@ struct PlanView: View {
             ForEach(tasks) { task in
                 TaskRow(task: task, selecting: selecting, selected: selected.contains(task.id),
                         onSelect: { toggle(task.id) }, onLongPress: { selecting = true; selected.insert(task.id) },
-                        scheduleDisplay: style)
+                        scheduleDisplay: style, completionDay: scope.completionDay)
             }
         } header: {
             HStack {
@@ -378,7 +379,7 @@ struct PlanView: View {
                 }.buttonStyle(.plain).listRowBackground(Color.clear)
             }
             if scope.isSearching || showDone {
-                ForEach(tasks) { TaskRow(task: $0) }
+                ForEach(tasks) { TaskRow(task: $0, completionDay: scope.completionDay) }
             }
         } header: {
             if scope.isSearching { Text("已完成 · \(tasks.count)") }

@@ -65,13 +65,16 @@ struct StartupView: View {
 struct CompletionRow: View {
     let record: CompletionRecord
     var showSymbol = true
+    var usesJournalDate = false
     var body: some View {
+        let date = usesJournalDate ? record.journalDate : record.date
         VStack(alignment: .leading, spacing: 5) {
             if showSymbol { Label(record.title, systemImage: "checkmark.circle.fill").foregroundStyle(Color.plannerAccent) }
             else { Text(record.title).foregroundStyle(.primary) }
             if let goal = record.goalTitle { Text(goal).font(.caption).foregroundStyle(.secondary) }
             if !record.text.isEmpty { Text(record.text).font(.subheadline).foregroundStyle(.secondary) }
-            Text(PlannerDates.text(record.date, "yyyy/M/d HH:mm")).font(.caption2).foregroundStyle(.secondary)
+            Text(PlannerDates.text(date, date == record.date ? "yyyy/M/d HH:mm" : "yyyy/M/d"))
+                .font(.caption2).foregroundStyle(.secondary)
         }.padding(.vertical, 4)
     }
 }

@@ -68,6 +68,7 @@ struct TaskRow: View {
     var onSelect: (() -> Void)?
     var onLongPress: (() -> Void)?
     var scheduleDisplay: TaskScheduleDisplay = .standard
+    var completionDay: Date?
     @State private var editing: TaskPresentation?
     @State private var scheduling = false
     @State private var expanded = false
@@ -77,7 +78,7 @@ struct TaskRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 11) {
                 Button {
-                    if selecting { onSelect?() } else { store.toggleDone(task.id) }
+                    if selecting { onSelect?() } else { store.toggleDone(task.id, completedOn: completionDay) }
                 } label: {
                     Image(systemName: selecting ? (selected ? "checkmark.circle.fill" : "circle") : (task.isDone ? "checkmark.circle.fill" : "circle"))
                         .font(.title3).foregroundStyle(task.cancelled ? Color.secondary : .plannerAccent)
@@ -101,7 +102,7 @@ struct TaskRow: View {
             }
             if expanded && !selecting {
                 ForEach(task.steps) { step in
-                    Button { store.toggleStep(task.id, stepID: step.id) } label: {
+                    Button { store.toggleStep(task.id, stepID: step.id, completedOn: completionDay) } label: {
                         Label(step.title, systemImage: step.done ? "checkmark.square.fill" : "square")
                             .font(.subheadline).foregroundStyle(step.done ? .secondary : .primary)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
@@ -126,7 +127,7 @@ struct TaskRow: View {
             Button("刪除任務", role: .destructive) { store.deleteTask(task.id) }
             Button("取消", role: .cancel) { }
         }
-        .sheet(item: $editing) { TaskEditor(initial: $0.task) }
+        .sheet(item: $editing) { TaskEditor(initial: $0.task, completionDay: completionDay) }
         .sheet(isPresented: $scheduling) { SchedulePicker(taskIDs: [task.id]) }
     }
 
@@ -196,8 +197,10 @@ struct TaskEditor: View {
     @State private var showHistory = false
     @State private var sortingSteps = false
     private let originalSteps: [Step]
-    init(initial: PlannerTask) {
+    private let completionDay: Date?
+    init(initial: PlannerTask, completionDay: Date? = nil) {
         originalSteps = initial.steps
+        self.completionDay = completionDay
         _value = State(initialValue: initial)
         _hasSchedule = State(initialValue: initial.schedule != nil)
         _hasDeadline = State(initialValue: initial.deadline != nil)
@@ -264,7 +267,11 @@ struct TaskEditor: View {
                         }
                     }
                 }
-                if let completed = value.completedAt { Section { LabeledContent("完成日期", value: PlannerDates.text(completed, "yyyy/M/d HH:mm")) } }
+                if let completed = value.completedAt {
+                    Section {
+                        LabeledContent("完成日期", value: value.completionDay ?? PlannerDates.text(completed, "yyyy-MM-dd"))
+                    }
+                }
                 if !value.planningHistory.isEmpty {
                     Section {
                         DisclosureGroup("安排歷史（\(value.planningHistory.count)）", isExpanded: $showHistory) {
@@ -317,6 +324,6 @@ struct TaskEditor: View {
             value.completedAt = completing ? (value.completedAt ?? Date()) : nil
             if completing { for index in value.steps.indices { value.steps[index].done = true } }
         }
-        return store.saveTask(value)
+        return store.saveTask(value, completedOn: completionDay)
     }
 }

@@ -4,6 +4,7 @@ struct JournalView: View {
     @EnvironmentObject private var store: PlannerStore
     @State private var visibleDays = 30
     @State private var editing: JournalDraft?
+    @State private var correction: CompletionDateDraft?
     @State private var search = PlannerSearch()
     @State private var scrolledToLatest = false
 
@@ -15,9 +16,11 @@ struct JournalView: View {
         let entries = Dictionary(grouping: store.journalIndex.entries.values.compactMap { entry, text in
             (term.isEmpty ? entry.date >= cutoff : text.contains(term)) ? entry : nil
         }, by: { calendar.startOfDay(for: $0.date) })
-        let records = Dictionary(grouping: store.journalIndex.completions.values.compactMap { entry, text in
-            (term.isEmpty ? entry.date >= cutoff : text.contains(term)) ? entry : nil
-        }, by: { calendar.startOfDay(for: $0.date) })
+        let visibleRecords = store.journalIndex.completions.values.compactMap { entry, text -> (Date, CompletionRecord)? in
+            let day = calendar.startOfDay(for: entry.journalDate)
+            return (term.isEmpty ? day >= cutoff : text.contains(term)) ? (day, entry) : nil
+        }
+        let records = Dictionary(grouping: visibleRecords, by: { $0.0 }).mapValues { $0.map { $0.1 } }
         let days = Set(entries.keys).union(records.keys).sorted()
         return NavigationStack {
             VStack(spacing: 0) {
@@ -37,6 +40,7 @@ struct JournalView: View {
                 }
             }
             .sheet(item: $editing) { JournalEditor(initial: $0.entry, completionID: $0.completionID) }
+            .sheet(item: $correction) { CompletionDateEditor(draft: $0) }
         }
     }
 
@@ -61,7 +65,12 @@ struct JournalView: View {
                         }
                         let finished = (records[day] ?? []).sorted { $0.date < $1.date }
                         if !finished.isEmpty {
-                            Text("\(isRecent(day) ? "最近完成" : "完成紀錄") · \(finished.count) 項").font(.caption).foregroundStyle(.secondary)
+                            HStack {
+                                Text("\(isRecent(day) ? "最近完成" : "完成紀錄") · \(finished.count) 項").foregroundStyle(.secondary)
+                                Spacer()
+                                Button("更正日期") { correction = CompletionDateDraft(day: day, records: finished) }
+                                    .buttonStyle(.borderless)
+                            }.font(.caption)
                             ForEach(finished) { record in completionRow(record) }
                         }
                     }.id(day)
@@ -92,7 +101,7 @@ struct JournalView: View {
 
     private var hasEarlier: Bool {
         store.journalIndex.entries.values.contains { $0.0.date < cutoff }
-            || store.journalIndex.completions.values.contains { $0.0.date < cutoff }
+            || store.journalIndex.completions.values.contains { $0.0.journalDate < cutoff }
     }
 
     private func isRecent(_ date: Date) -> Bool {
@@ -106,9 +115,10 @@ struct JournalView: View {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).frame(minWidth: 34, minHeight: 44)
                 }.buttonStyle(.borderless).accessibilityLabel("取消完成：\(record.title)")
             }
-            CompletionRow(record: record, showSymbol: false).frame(maxWidth: .infinity, alignment: .leading)
+            CompletionRow(record: record, showSymbol: false, usesJournalDate: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Button {
-                editing = JournalDraft(entry: store.journalEntry(on: record.date, adding: record), completionID: record.id)
+                editing = JournalDraft(entry: store.journalEntry(adding: record), completionID: record.id)
             } label: { Image(systemName: "book.closed.fill").overlay(alignment: .topTrailing) {
                 Image(systemName: "plus.circle.fill").font(.caption2).background(.background, in: Circle()).offset(x: 5, y: -3)
             }.frame(minWidth: 36, minHeight: 44) }
@@ -116,6 +126,69 @@ struct JournalView: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button("刪除", role: .destructive) { store.hideJournalCompletion(record) }
+        }
+    }
+}
+
+private struct CompletionDateDraft: Identifiable {
+    var id: Date { day }
+    let day: Date
+    let records: [CompletionRecord]
+}
+
+private struct CompletionDateEditor: View {
+    @EnvironmentObject private var store: PlannerStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var date: Date
+    @State private var selected: Set<UUID> = []
+    let draft: CompletionDateDraft
+
+    init(draft: CompletionDateDraft) {
+        self.draft = draft
+        _date = State(initialValue: draft.day)
+        if draft.records.count == 1 { _selected = State(initialValue: Set(draft.records.map(\.id))) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                DatePicker("完成日期", selection: $date, displayedComponents: .date)
+                    .environment(\.calendar, PlannerDates.calendar)
+                Section {
+                    ForEach(draft.records) { record in
+                        Button {
+                            if !selected.insert(record.id).inserted { selected.remove(record.id) }
+                        } label: {
+                            HStack {
+                                Text(record.title).foregroundStyle(.primary)
+                                Spacer()
+                                Image(systemName: selected.contains(record.id) ? "checkmark.circle.fill" : "circle")
+                            }.contentShape(Rectangle())
+                        }
+                        .accessibilityAddTraits(selected.contains(record.id) ? .isSelected : [])
+                    }
+                } header: {
+                    HStack {
+                        Text("已選 \(selected.count) 項")
+                        Spacer()
+                        if draft.records.count > 1 {
+                            Button(selected.count == draft.records.count ? "取消全選" : "全選") {
+                                selected = selected.count == draft.records.count ? [] : Set(draft.records.map(\.id))
+                            }.textCase(nil)
+                        }
+                    }
+                }
+            }
+            .plannerErrors()
+            .navigationTitle("更正完成日期").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("儲存") {
+                        if store.correctCompletionDate(selected, to: date) { dismiss() }
+                    }.disabled(selected.isEmpty || PlannerDates.calendar.isDate(date, inSameDayAs: draft.day))
+                }
+            }
         }
     }
 }

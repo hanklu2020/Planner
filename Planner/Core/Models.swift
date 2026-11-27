@@ -76,6 +76,12 @@ enum PlannerDates {
         calendar.date(byAdding: scale.component, value: value, to: date)!
     }
     static func text(_ date: Date, _ format: String = "M/d", calendar: Calendar = calendar) -> String {
+        formatter(format, calendar: calendar).string(from: date)
+    }
+    static func date(forDay day: String, calendar: Calendar = calendar) -> Date? {
+        formatter("yyyy-MM-dd", calendar: calendar).date(from: day)
+    }
+    private static func formatter(_ format: String, calendar: Calendar) -> DateFormatter {
         // Keep formatters local to each thread: fast reuse without cross-thread mutation.
         let key = "Planner.format.\(calendar.identifier).\(calendar.timeZone.identifier).\(calendar.firstWeekday).\(calendar.minimumDaysInFirstWeek).\(format)"
         let formatter: DateFormatter
@@ -88,7 +94,7 @@ enum PlannerDates {
             formatter.dateFormat = format
             Thread.current.threadDictionary[key] = formatter
         }
-        return formatter.string(from: date)
+        return formatter
     }
     static func heading(_ date: Date, scale: TimeScale) -> String {
         switch scale {
@@ -168,6 +174,7 @@ struct PlannerTask: Codable, Identifiable, Equatable {
     var contactIDs: [UUID] = []
     var createdAt = Date()
     var completedAt: Date?
+    var completionDay: String?
     var cancelled = false
     var focusDate: Date?
     var planningHistory: [PlanningChange] = []
@@ -229,9 +236,16 @@ struct CompletionRecord: Codable, Identifiable, Equatable {
     var addedToJournal: Bool?
     var hiddenFromJournal: Bool?
     var journalExcerpt: String?
+    var completionDay: String?
 
     var isVisible: Bool { withdrawn != true }
     var appearsInJournal: Bool { isVisible && addedToJournal != true && hiddenFromJournal != true }
+    var journalDate: Date {
+        let calendar = PlannerDates.calendar
+        guard let completionDay, let day = PlannerDates.date(forDay: completionDay, calendar: calendar),
+              !calendar.isDate(date, inSameDayAs: day) else { return date }
+        return day
+    }
     var journalText: String {
         journalExcerpt ?? text.components(separatedBy: "\n").compactMap { line in
             if line.hasPrefix("- [ ] ") { return nil }
@@ -282,7 +296,21 @@ struct PlannerDocument: Codable, Equatable {
             completions.append(CompletionRecord(taskID: task.id, date: date, title: task.title,
                 text: [task.notes, steps].filter { !$0.isEmpty }.joined(separator: "\n\n"), domain: task.domain,
                 goalTitle: task.goalID.flatMap { titles[$0] }, contactIDs: task.contactIDs,
-                journalExcerpt: [task.notes, done].filter { !$0.isEmpty }.joined(separator: "\n\n")))
+                journalExcerpt: [task.notes, done].filter { !$0.isEmpty }.joined(separator: "\n\n"),
+                completionDay: task.completionDay))
+        }
+    }
+
+    mutating func correctCompletionDay(_ day: String, for ids: Set<UUID>) {
+        var changed: [UUID: [Date]] = [:]
+        for i in completions.indices where ids.contains(completions[i].id) && completions[i].appearsInJournal {
+            completions[i].completionDay = day
+            changed[completions[i].taskID, default: []].append(completions[i].date)
+        }
+        for i in tasks.indices {
+            guard let date = tasks[i].completedAt,
+                  changed[tasks[i].id]?.contains(where: { abs(date.timeIntervalSince($0)) < 1 }) == true else { continue }
+            tasks[i].completionDay = day
         }
     }
 
